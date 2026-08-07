@@ -10,49 +10,17 @@ modules.
 
 ## Install
 
-> **`go get github.com/Credda-io/api/packages/sdk-go` cannot work, and no
-> release will make it work from here.** Two separate reasons: `Credda-io/api`
-> is a **private** repository, so `proxy.golang.org` returns a 404 for anyone
-> outside the org; and the repo carries **no git tags**, so even with access the
-> module resolves to a pseudo-version at best. This is a property of where the
-> code lives, not a missing publish step.
-
-There are exactly two real fixes, and only the second works today.
-
-**Option A: a public mirror repository** (needs a human; not done). Push
-`packages/sdk-go` to its own public repo, e.g. `github.com/Credda-io/credda-go`,
-with `module github.com/Credda-io/credda-go` in `go.mod` and a `v0.1.0` tag.
-That, and only that, makes `go get` work for the public. It means owning a
-second repo and a sync path back to this monorepo, which is a deliberate
-decision, not a chore to be done incidentally.
-
-**Option B: vendor it. This works right now.** The package is stdlib-only, so
-vendoring costs you nothing but a copy:
-
 ```sh
-mkdir -p internal/credda
-cp path/to/api/packages/sdk-go/*.go internal/credda/
-rm internal/credda/*_test.go   # optional; the tests are hermetic and pass as-is
+go get github.com/Credda-io/credda-go
 ```
 
 ```go
-import credda "yourmodule/internal/credda"
+import credda "github.com/Credda-io/credda-go"
 ```
 
-Working from a local checkout of this repo instead? A `replace` directive keeps
-the canonical import path and needs no copy:
+That is the whole install. No credentials, no vendoring, no `replace` directive.
 
-```
-// go.mod
-require github.com/Credda-io/api/packages/sdk-go v0.0.0
-replace github.com/Credda-io/api/packages/sdk-go => ../api/packages/sdk-go
-```
-
-```go
-import credda "github.com/Credda-io/api/packages/sdk-go"
-```
-
-Everything below assumes the package is imported as `credda`, however you got it.
+Everything below assumes the package is imported as `credda`.
 
 ## Quickstart
 
