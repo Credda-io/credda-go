@@ -1,0 +1,334 @@
+// Package credda is the official Go client for the Credda Reliability Score API.
+//
+// Two access models, matching the API (and the TypeScript SDK, @credda/js):
+//
+//   - Public   — ResolveToken / GetTrustExport / GetDIDDocument / GetTrustRegistry
+//     hit public endpoints and need no API key.
+//   - Platform — everything else sends a platform API key as a Bearer token.
+//     These are for SERVER-SIDE use only; never ship a `crd_live_…` key to an
+//     untrusted client.
+//
+// The zero value of Client is not usable — construct one with NewClient.
+package credda
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// DefaultBaseURL is the production Credda API root.
+const DefaultBaseURL = "https://api.credda.io"
+
+// apiPrefix is prepended to every versioned API path. The /.well-known/*
+// discovery documents live outside it (see getWellKnown).
+const apiPrefix = "/api/v1"
+
+// Client is a Credda API client. It is safe for concurrent use by multiple
+// goroutines.
+type Client struct {
+	baseURL    string
+	apiKey     string
+	httpClient *http.Client
+}
+
+// Option configures a Client. Pass options to NewClient.
+type Option func(*Client)
+
+// WithAPIKey sets the platform API key sent as `Authorization: Bearer …` on
+// every request that requires one.
+func WithAPIKey(key string) Option {
+	return func(c *Client) { c.apiKey = key }
+}
+
+// WithBaseURL overrides the API root (default DefaultBaseURL). Trailing
+// slashes are trimmed.
+func WithBaseURL(base string) Option {
+	return func(c *Client) {
+		if base != "" {
+			c.baseURL = strings.TrimRight(base, "/")
+		}
+	}
+}
+
+// WithHTTPClient supplies a custom *http.Client (timeouts, transport, proxies).
+func WithHTTPClient(hc *http.Client) Option {
+	return func(c *Client) {
+		if hc != nil {
+			c.httpClient = hc
+		}
+	}
+}
+
+// NewClient builds a Client. With no options it targets DefaultBaseURL with a
+// 30s-timeout HTTP client and no API key (public endpoints only).
+func NewClient(opts ...Option) *Client {
+	c := &Client{
+		baseURL:    DefaultBaseURL,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+	}
+	for _, o := range opts {
+		if o != nil {
+			o(c)
+		}
+	}
+	return c
+}
+
+// APIError is returned for any non-2xx API response. It carries the HTTP
+// status, the API's own error message (from the JSON `error` or `message`
+// field) and the request path.
+//
+// It also carries everything needed to debug the failure later:
+//
+//   - RequestID — the X-Request-Id correlation id. Log it. Quoting it lets
+//     Credda find the exact request in our logs; without it, support starts
+//     from "describe what happened".
+//   - Code — the stable machine code (see GET /api/v1/errors).
+//   - Details — structured context, e.g. one entry per failed field on a
+//     VALIDATION_ERROR.
+//   - RetryAfter — how long the server asked you to wait (every 429 says so);
+//     zero when it did not.
+type APIError struct {
+	StatusCode int
+	Message    string
+	Path       string
+	// Code is the API's stable machine code, e.g. "QUOTA_EXCEEDED".
+	Code string
+	// RequestID is the X-Request-Id correlation id for this request.
+	RequestID string
+	// Details is the raw `details` field, left as JSON so a caller can decode
+	// it into whatever shape the specific code documents.
+	Details json.RawMessage
+	// RetryAfter is the server's requested back-off. Zero when not sent.
+	RetryAfter time.Duration
+	// Retryable is the API's own verdict on whether repeating the identical
+	// request can succeed later. Never retry when false.
+	Retryable bool
+}
+
+func (e *APIError) Error() string {
+	if e.RequestID != "" {
+		return fmt.Sprintf("credda: %s (status %d, path %s, requestId %s)", e.Message, e.StatusCode, e.Path, e.RequestID)
+	}
+	return fmt.Sprintf("credda: %s (status %d, path %s)", e.Message, e.StatusCode, e.Path)
+}
+
+// parseRetryAfter converts a Retry-After header into a duration. Accepts the
+// delta-seconds form the API always sends and the HTTP-date form the spec also
+// permits; returns 0 for absent/unparseable values and never returns negative.
+func parseRetryAfter(raw string, now time.Time) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(raw); err == nil {
+		if secs < 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if at, err := http.ParseTime(raw); err == nil {
+		if d := at.Sub(now); d > 0 {
+			return d
+		}
+		return 0
+	}
+	return 0
+}
+
+// AsAPIError reports whether err is (or wraps) an *APIError, returning it.
+func AsAPIError(err error) (*APIError, bool) {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr, true
+	}
+	return nil, false
+}
+
+// ── transport ───────────────────────────────────────────────────────────────
+
+type requestOptions struct {
+	method      string
+	path        string // relative to apiPrefix unless absolute is true
+	absolute    bool   // path is relative to the API root (for /.well-known/*)
+	body        any
+	needsAPIKey bool
+	headers     map[string]string
+}
+
+func (c *Client) do(ctx context.Context, ro requestOptions, out any) error {
+	if ro.needsAPIKey && c.apiKey == "" {
+		return fmt.Errorf("credda: %s %s requires an API key — construct the client with WithAPIKey", ro.method, ro.path)
+	}
+
+	prefix := apiPrefix
+	if ro.absolute {
+		prefix = ""
+	}
+	full := c.baseURL + prefix + ro.path
+
+	var reader io.Reader
+	if ro.body != nil {
+		encoded, err := json.Marshal(ro.body)
+		if err != nil {
+			return fmt.Errorf("credda: encoding request body: %w", err)
+		}
+		reader = bytes.NewReader(encoded)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, ro.method, full, reader)
+	if err != nil {
+		return fmt.Errorf("credda: building request: %w", err)
+	}
+	if ro.body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.apiKey != "" && ro.needsAPIKey {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	for k, v := range ro.headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("credda: %s %s: %w", ro.method, ro.path, err)
+	}
+	defer resp.Body.Close()
+
+	raw, readErr := io.ReadAll(resp.Body)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		msg := ""
+		var body struct {
+			Error     string          `json:"error"`
+			Message   string          `json:"message"`
+			Code      string          `json:"code"`
+			RequestID string          `json:"requestId"`
+			Retryable bool            `json:"retryable"`
+			Details   json.RawMessage `json:"details"`
+		}
+		if readErr == nil && json.Unmarshal(raw, &body) == nil {
+			msg = body.Error
+			if msg == "" {
+				msg = body.Message
+			}
+		}
+		if msg == "" {
+			msg = fmt.Sprintf("request failed (%d)", resp.StatusCode)
+		}
+		// The header is authoritative — it survives a non-JSON body; the body
+		// echoes the same id.
+		requestID := resp.Header.Get("X-Request-Id")
+		if requestID == "" {
+			requestID = body.RequestID
+		}
+		return &APIError{
+			StatusCode: resp.StatusCode,
+			Message:    msg,
+			Path:       ro.path,
+			Code:       body.Code,
+			RequestID:  requestID,
+			Details:    body.Details,
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+			Retryable:  body.Retryable,
+		}
+	}
+
+	if out == nil {
+		return nil
+	}
+	if readErr != nil {
+		return fmt.Errorf("credda: reading response body: %w", readErr)
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		// 204 / empty body for a caller that expected JSON — leave zero value.
+		return nil
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("credda: decoding response from %s: %w", ro.path, err)
+	}
+	return nil
+}
+
+func (c *Client) get(ctx context.Context, path string, needsKey bool, out any) error {
+	return c.do(ctx, requestOptions{method: http.MethodGet, path: path, needsAPIKey: needsKey}, out)
+}
+
+func (c *Client) getWellKnown(ctx context.Context, path string, out any) error {
+	return c.do(ctx, requestOptions{method: http.MethodGet, path: path, absolute: true}, out)
+}
+
+func (c *Client) post(ctx context.Context, path string, body any, headers map[string]string, out any) error {
+	return c.do(ctx, requestOptions{
+		method: http.MethodPost, path: path, body: body, needsAPIKey: true, headers: headers,
+	}, out)
+}
+
+// postPublic POSTs without attaching an API key — for token-gated public
+// endpoints (e.g. a counterparty responding to a confirmation request).
+func (c *Client) postPublic(ctx context.Context, path string, body any, out any) error {
+	return c.do(ctx, requestOptions{method: http.MethodPost, path: path, body: body, needsAPIKey: false}, out)
+}
+
+func (c *Client) patch(ctx context.Context, path string, body any, out any) error {
+	return c.do(ctx, requestOptions{method: http.MethodPatch, path: path, body: body, needsAPIKey: true}, out)
+}
+
+func (c *Client) delete(ctx context.Context, path string) error {
+	return c.do(ctx, requestOptions{method: http.MethodDelete, path: path, needsAPIKey: true}, nil)
+}
+
+func esc(s string) string { return url.PathEscape(s) }
+
+func withQuery(path string, qs url.Values) string {
+	if len(qs) == 0 {
+		return path
+	}
+	return path + "?" + qs.Encode()
+}
+
+func setInt(qs url.Values, key string, v *int) {
+	if v != nil {
+		qs.Set(key, strconv.Itoa(*v))
+	}
+}
+
+func setStr(qs url.Values, key, v string) {
+	if v != "" {
+		qs.Set(key, v)
+	}
+}
+
+func setBool(qs url.Values, key string, v *bool) {
+	if v != nil {
+		qs.Set(key, strconv.FormatBool(*v))
+	}
+}
+
+func setFloat(qs url.Values, key string, v *float64) {
+	if v != nil {
+		qs.Set(key, strconv.FormatFloat(*v, 'f', -1, 64))
+	}
+}
+
+// Int is a helper for building optional int query/body fields.
+func Int(v int) *int { return &v }
+
+// Bool is a helper for building optional bool body fields.
+func Bool(v bool) *bool { return &v }
+
+// Float is a helper for building optional float body fields.
+func Float(v float64) *float64 { return &v }
+
+// String is a helper for building optional string body fields.
+func String(v string) *string { return &v }
