@@ -29,7 +29,7 @@ Everything below assumes the package is imported as `credda`.
 ```go
 client := credda.NewClient()
 
-trust, err := client.ResolveToken(ctx, "tok_abc123")
+trust, err := client.ResolveToken(ctx, "crd_share_…")
 if err != nil {
     log.Fatal(err)
 }
