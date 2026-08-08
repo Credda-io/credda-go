@@ -316,3 +316,15 @@ go test ./...
 ```
 
 Tests are hermetic — every HTTP interaction runs against `httptest.NewServer`.
+
+## License
+
+MIT © Credda. See [LICENSE](LICENSE).
+
+---
+
+Part of the Credda SDK family:
+[`@credda/js`](https://github.com/Credda-io/credda-js) ·
+[`credda-go`](https://github.com/Credda-io/credda-go) ·
+[`@credda/cli`](https://github.com/Credda-io/credda-cli) ·
+[`@credda/mcp-server`](https://github.com/Credda-io/credda-mcp)
