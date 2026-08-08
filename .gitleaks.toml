@@ -1,0 +1,24 @@
+# gitleaks configuration for credda-go.
+#
+# GitHub's secret scanning and push protection are not enabled on this
+# repository, so the CI job in .github/workflows/ci.yml is the only thing
+# standing between a committed credential and a public repo. It has to stay
+# green to be worth anything, which means the known false positives are
+# recorded here rather than left to train everyone to ignore a red run.
+
+[extend]
+useDefault = true
+
+# The hermetic tests assert that ReportEvent sends an Idempotency-Key header and
+# echoes it in the request body. The fixture values are readable literals like
+# "order-42-fulfilled", and their entropy trips the generic-api-key heuristic.
+# They are test data, not credentials: nothing in this package authenticates
+# against anything, and every HTTP interaction runs against httptest.NewServer.
+#
+# Scoped to the idempotency fixtures in that one file, so a real key committed
+# anywhere in the repository — including elsewhere in client_test.go — still
+# fails the build.
+[allowlist]
+regexTarget = "line"
+paths = ['''^client_test\.go$''']
+regexes = ['''(?i)idempotency''']

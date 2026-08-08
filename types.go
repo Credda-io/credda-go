@@ -87,8 +87,8 @@ func (v *EnumValueDoc) UnmarshalJSON(data []byte) error {
 
 // EnumDoc is one documented enum from GET /api/v1/enums.
 type EnumDoc struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
 	// UsedIn lists where this enum appears on the wire.
 	UsedIn []string       `json:"usedIn"`
 	Values []EnumValueDoc `json:"values"`
@@ -155,12 +155,12 @@ type TrustPayload struct {
 	FinalScore        *float64 `json:"finalScore"`
 	ScoreBand         *string  `json:"scoreBand"`
 	Confidence        float64  `json:"confidence"`
-	VerifiedPlatforms int     `json:"verifiedPlatforms"`
-	TotalEvents       int     `json:"totalEvents"`
-	ScoreFrozen       bool    `json:"scoreFrozen"`
-	FormulaVersion    string  `json:"formulaVersion"`
-	ComputedAt        *string `json:"computedAt"`
-	Issuer            string  `json:"issuer"`
+	VerifiedPlatforms int      `json:"verifiedPlatforms"`
+	TotalEvents       int      `json:"totalEvents"`
+	ScoreFrozen       bool     `json:"scoreFrozen"`
+	FormulaVersion    string   `json:"formulaVersion"`
+	ComputedAt        *string  `json:"computedAt"`
+	Issuer            string   `json:"issuer"`
 
 	// Credential is a signed, offline-verifiable Verifiable Trust Credential
 	// (EdDSA JWT). Optional.
@@ -284,10 +284,10 @@ type ScorePayload struct {
 	Confidence     float64         `json:"confidence"`
 	Breakdown      *ScoreBreakdown `json:"breakdown"`
 	FormulaVersion *string         `json:"formulaVersion"`
-	VelocityFlag   bool           `json:"velocityFlag"`
-	ComputedAt     *string        `json:"computedAt"`
-	ScoreFrozen    *bool          `json:"scoreFrozen,omitempty"`
-	FrozenAt       *string        `json:"frozenAt,omitempty"`
+	VelocityFlag   bool            `json:"velocityFlag"`
+	ComputedAt     *string         `json:"computedAt"`
+	ScoreFrozen    *bool           `json:"scoreFrozen,omitempty"`
+	FrozenAt       *string         `json:"frozenAt,omitempty"`
 }
 
 // BatchScoreEntry is one entry in a batch score read. Unknown ids come back
@@ -1350,9 +1350,9 @@ type AgentScore struct {
 	FinalScore     *float64 `json:"finalScore"`
 	ScoreBand      *string  `json:"scoreBand"`
 	Confidence     float64  `json:"confidence"`
-	FormulaVersion string  `json:"formulaVersion"`
-	ComputedAt     string  `json:"computedAt"`
-	ScoreFrozen    bool    `json:"scoreFrozen"`
+	FormulaVersion string   `json:"formulaVersion"`
+	ComputedAt     string   `json:"computedAt"`
+	ScoreFrozen    bool     `json:"scoreFrozen"`
 }
 
 // AgentDetail is GET /api/v1/agents/:id.
