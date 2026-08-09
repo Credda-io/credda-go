@@ -481,6 +481,12 @@ type CreateReferenceInput struct {
 	CounterpartyRef  string `json:"counterpartyRef"`
 	CounterpartyName string `json:"counterpartyName,omitempty"`
 	Description      string `json:"description,omitempty"`
+	// ClaimRef gives this reference the identity of the claim it confirms. Send
+	// the SAME value you send in RecordQualificationInput.ClaimRef for that
+	// claim and the two resolve to ONE claim (verified wins), so a claim synced
+	// self-attested and then confirmed by a reference is one entry, not two.
+	// Caller-supplied only; empty means the confirmed claim stands alone.
+	ClaimRef string `json:"claimRef,omitempty"`
 	// ReturnURL sends the reference back to your own page after they decide on
 	// the HOSTED page. Must be an absolute https URL on a public host with no
 	// embedded credentials — loopback/private/link-local destinations are
@@ -526,6 +532,12 @@ type ReferencePreview struct {
 	Reference        *string `json:"reference"`
 	CounterpartyName *string `json:"counterpartyName"`
 	Description      *string `json:"description"`
+	// ClaimRef is the stable identity of the CLAIM this reference is about,
+	// supplied at create time and passed to the writer on confirm so the
+	// confirmation merges with the same claim synced elsewhere instead of
+	// becoming a second entry for one job. Nil when none was supplied; never
+	// shown on the public preview.
+	ClaimRef *string `json:"claimRef"`
 	ExpiresAt        string  `json:"expiresAt"`
 }
 
@@ -1162,6 +1174,19 @@ type RecordQualificationInput struct {
 	// VerifiedBy names the third-party witness. Required for the claim to count
 	// as verified — there is deliberately no "isVerified" field to set.
 	VerifiedBy string `json:"verifiedBy,omitempty"`
+	// ClaimRef is a stable, caller-chosen identity for THIS claim (1..200).
+	// Claims sharing (Category, ClaimRef) resolve to ONE claim, so syncing the
+	// same claim twice — self-attested when the user enters it, verified when a
+	// counterparty confirms it — counts once (verified wins). Empty means one
+	// call is one claim, exactly as before.
+	ClaimRef string `json:"claimRef,omitempty"`
+	// Retract records a RETRACTION MARKER for (Category, ClaimRef) instead of a
+	// claim, withdrawing it from the measure and the itemised record. It
+	// REQUIRES ClaimRef (400 without it), and any VerifiedBy sent alongside is
+	// IGNORED — a retraction is never verified. The ledger stays append-only:
+	// nothing is deleted, the marker is one more event, and a claim a witness
+	// already confirmed is permanent record.
+	Retract bool `json:"retract,omitempty"`
 }
 
 // RecordQualificationResult is POST /api/v1/users/:id/qualifications. The claim
@@ -1172,6 +1197,10 @@ type RecordQualificationResult struct {
 	Category   string `json:"category"`
 	EventType  string `json:"eventType"`
 	IsVerified bool   `json:"isVerified"`
+	// ClaimRef is the claim identity as stored. Nil when none was supplied.
+	ClaimRef *string `json:"claimRef"`
+	// Retracted is true when this call recorded a retraction marker, not a claim.
+	Retracted bool `json:"retracted"`
 	// VerificationNote says why the claim was recorded as self-attested. Nil
 	// when verified.
 	VerificationNote *string `json:"verificationNote"`
