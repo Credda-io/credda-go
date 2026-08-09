@@ -537,8 +537,8 @@ type ReferencePreview struct {
 	// confirmation merges with the same claim synced elsewhere instead of
 	// becoming a second entry for one job. Nil when none was supplied; never
 	// shown on the public preview.
-	ClaimRef *string `json:"claimRef"`
-	ExpiresAt        string  `json:"expiresAt"`
+	ClaimRef  *string `json:"claimRef"`
+	ExpiresAt string  `json:"expiresAt"`
 }
 
 // ReferencePreviewResult is the envelope from PreviewReference.
