@@ -752,7 +752,7 @@ func (c *Client) ListUsers(ctx context.Context, query *ListUsersQuery) (*ListUse
 	return &out, nil
 }
 
-// applyBookFilters serialises the closed book filter set. Shared by ListUsers
+// applyBookFilters serializes the closed book filter set. Shared by ListUsers
 // and GetBookSummary so the two surfaces can never disagree about the filter
 // vocabulary — the same reason the server parses both with one function.
 func applyBookFilters(qs url.Values, f *BookFilterQuery) {
@@ -1237,7 +1237,7 @@ type RecordQualificationInput struct {
 	// call is one claim, exactly as before.
 	ClaimRef string `json:"claimRef,omitempty"`
 	// Retract records a RETRACTION MARKER for (Category, ClaimRef) instead of a
-	// claim, withdrawing it from the measure and the itemised record. It
+	// claim, withdrawing it from the measure and the itemized record. It
 	// REQUIRES ClaimRef (400 without it), and any VerifiedBy sent alongside is
 	// IGNORED — a retraction is never verified. The ledger stays append-only:
 	// nothing is deleted, the marker is one more event, and a claim a witness
@@ -1434,7 +1434,7 @@ type ReliabilityReportOutcome struct {
 	OccurredAt string `json:"occurredAt"`
 }
 
-// ReliabilityReportFactor is a ranked driver of the score (a relabelled reason
+// ReliabilityReportFactor is a ranked driver of the score (a relabeled reason
 // code).
 type ReliabilityReportFactor struct {
 	Code   string `json:"code"`
@@ -2131,7 +2131,7 @@ func (c *Client) GetScoreAnalytics(ctx context.Context, window *AnalyticsWindow)
 // ─── Activation campaigns (POST/GET /api/v1/activation/campaigns) ───────────
 
 // ActivationRow is one roster row for CreateActivationCampaign — exactly a
-// CreateConfirmationInput (embedded, so its fields serialise inline) plus an
+// CreateConfirmationInput (embedded, so its fields serialize inline) plus an
 // optional RowKey: your own stable id for the roster line (e.g. a shift id),
 // which makes the campaign idempotent per row.
 type ActivationRow struct {
@@ -2189,7 +2189,7 @@ type ActivationCampaignResult struct {
 }
 
 // ActivationFunnel is the factual counts a campaign reports — never a score or a
-// judgement. ConfirmationRate is confirmed/submitted (0 when nothing submitted).
+// judgment. ConfirmationRate is confirmed/submitted (0 when nothing submitted).
 type ActivationFunnel struct {
 	Submitted        int     `json:"submitted"`
 	Pending          int     `json:"pending"`

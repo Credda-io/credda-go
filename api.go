@@ -701,7 +701,7 @@ func (c *Client) GetScreeningResults(ctx context.Context, id string) (*Screening
 //
 // A mapping is DECLARATIVE DATA, never code (see IngestMapping).
 //
-// isVerified defaults to false. It is only honoured for a record whose mapping
+// isVerified defaults to false. It is only honored for a record whose mapping
 // also resolves verifiedBy (the third party who witnessed the outcome);
 // otherwise the record still ingests, downgraded, with a warning.
 

@@ -97,7 +97,7 @@ type DisputeResolvedData struct {
 	Outcome string `json:"outcome"` // FOR_USER | AGAINST_USER
 	Status  string `json:"status"`  // RESOLVED_FOR_USER | RESOLVED_AGAINST_USER
 	// Lapsed is true when the dispute lapsed unadjudicated (resolved in the
-	// user's favour).
+	// user's favor).
 	Lapsed     bool   `json:"lapsed"`
 	ResolvedAt string `json:"resolvedAt"`
 }
