@@ -27,7 +27,7 @@ type PlanFeature struct {
 	Label string `json:"label"`
 }
 
-// PlanCatalog is the developer plan catalog from GET /api/v1/plans — the tiers,
+// PlanCatalog is the developer plan catalog from GET /api/v1/plans: the tiers,
 // their scopes, rate limits, official monthly prices and feature matrix.
 type PlanCatalog struct {
 	Pricing  string        `json:"pricing"` // "official"
@@ -189,7 +189,7 @@ type ReasonCodeResult struct {
 // (GET /api/v1/reason-codes): the stable, versioned meaning of every reason
 // code the scoring explanation can attribute. A B2B2C partner draws its
 // Regulation B statement of specific reasons from a subject's ranked codes
-// (returned on GET /score/explain). Credda supplies the attribution only — it
+// (returned on GET /score/explain). Credda supplies the attribution only: it
 // is not a creditor and issues no decision or notice.
 type ReasonCodeCatalog struct {
 	ReasonCodesVersion string `json:"reasonCodesVersion"`
@@ -226,7 +226,7 @@ type WebhookEventCatalog struct {
 // TrustPayload is the public payload from GET /api/v1/verify/:token. It
 // contains no platform user id.
 // FinalScore and ScoreBand are POINTERS because a subject may have no computed
-// score yet. They are nil in that case — never a placeholder. Decoding them as
+// score yet. They are nil in that case, never a placeholder. Decoding them as
 // float64/string would turn a JSON null into 0/"", i.e. a score of zero.
 type TrustPayload struct {
 	Token             string   `json:"token"`
@@ -292,7 +292,7 @@ type TrustRegistry struct {
 
 // TrustExportScore is the plaintext score block of a trust export.
 // FinalScore and ScoreBand are POINTERS because a subject may have no computed
-// score yet. They are nil in that case — never a placeholder. Decoding them as
+// score yet. They are nil in that case, never a placeholder. Decoding them as
 // float64/string would turn a JSON null into 0/"", i.e. a score of zero.
 type TrustExportScore struct {
 	FinalScore     *float64 `json:"finalScore"`
@@ -351,7 +351,7 @@ type ScoreBreakdown struct {
 
 // ScorePayload comes from GET /api/v1/users/:id/score.
 // FinalScore and ScoreBand are POINTERS because a subject may have no computed
-// score yet. They are nil in that case — never a placeholder. Decoding them as
+// score yet. They are nil in that case, never a placeholder. Decoding them as
 // float64/string would turn a JSON null into 0/"", i.e. a score of zero.
 // Breakdown is likewise nil when there is no snapshot: a zeroed breakdown reads
 // as a PERFECT record (dr 0 = no disputes, multipliers 1 = ideal).
@@ -369,7 +369,7 @@ type ScorePayload struct {
 }
 
 // BatchScoreEntry is one entry in a batch score read. Unknown ids come back
-// with Error == "not_found" and no score fields set — check Error first.
+// with Error == "not_found" and no score fields set. Check Error first.
 type BatchScoreEntry struct {
 	UserID      string   `json:"userId"`
 	FinalScore  *float64 `json:"finalScore,omitempty"`
@@ -630,7 +630,7 @@ type EarningsAttested struct {
 }
 
 // EarningsStability holds the volatility/consistency metrics.
-// CoefficientOfVariation is nil when there is no income to vary — never coerced to 0.
+// CoefficientOfVariation is nil when there is no income to vary, never coerced to 0.
 type EarningsStability struct {
 	MonthsWithEarnings       int      `json:"monthsWithEarnings"`
 	MedianMonthly            float64  `json:"medianMonthly"`
@@ -659,7 +659,7 @@ type EarningsCoverage struct {
 	SelfReportedShare *float64 `json:"selfReportedShare"`
 }
 
-// VerifiedEarnings comes from GET /api/v1/users/:id/earnings — an attestation of
+// VerifiedEarnings comes from GET /api/v1/users/:id/earnings, an attestation of
 // income ALREADY RECORDED on the ledger. Currency is always null: amounts are
 // platform-reported units. This is not an income verification for a credit
 // decision and not a consumer report; see Disclosures.
@@ -694,7 +694,7 @@ type EarningsSummary struct {
 	Disclosures              []string       `json:"disclosures"`
 }
 
-// EarningsCredentialResult comes from POST /api/v1/users/:id/earnings/credential —
+// EarningsCredentialResult comes from POST /api/v1/users/:id/earnings/credential,
 // a signed, revocable W3C Verifiable Credential of type CreddaEarningsCredential.
 type EarningsCredentialResult struct {
 	Format          string         `json:"format"`
@@ -721,7 +721,7 @@ type TimelineDispute struct {
 }
 
 // TimelineItem is one entry in a user's timeline. It is a flattened union of
-// the TS SDK's two variants — check Type ("event" or "score_change") to know
+// the TS SDK's two variants. Check Type ("event" or "score_change") to know
 // which fields are populated.
 type TimelineItem struct {
 	Type       string `json:"type"`
@@ -866,7 +866,7 @@ func (r *RiskSignal) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// RiskPayload comes from GET /api/v1/users/:id/risk. Advisory only — these
+// RiskPayload comes from GET /api/v1/users/:id/risk. Advisory only: these
 // signals never affect a score.
 type RiskPayload struct {
 	RiskLevel  string       `json:"riskLevel"`
@@ -896,7 +896,7 @@ type UsageTotals struct {
 	ServerError int `json:"serverError"`
 }
 
-// UsagePayload comes from GET /api/v1/usage — the calling platform's own
+// UsagePayload comes from GET /api/v1/usage, the calling platform's own
 // consumption vs. its tier limits.
 type UsagePayload struct {
 	Platform struct {
@@ -912,7 +912,7 @@ type UsagePayload struct {
 		ResetAt   string `json:"resetAt"`
 	} `json:"quota"`
 	// Window is the trailing-days window (Days) or an explicit range
-	// (From/To, inclusive ISO dates, clamped to counter retention) —
+	// (From/To, inclusive ISO dates, clamped to counter retention),
 	// whichever was requested; the other fields are zero-valued.
 	Window struct {
 		Days          int    `json:"days"`
@@ -935,8 +935,8 @@ type ActivityEntry struct {
 	ID string `json:"id"`
 	// Action is the audit action, e.g. EVENT_CREATED, WEBHOOK_UPDATED.
 	Action string `json:"action"`
-	// Payload is the action's recorded detail, as written — always includes
-	// the calling platform's own platformId.
+	// Payload is the action's recorded detail, as written (always includes
+	// the calling platform's own platformId).
 	Payload   map[string]any `json:"payload"`
 	CreatedAt string         `json:"createdAt"`
 }
@@ -958,7 +958,7 @@ type ActivityQuery struct {
 	To     string
 }
 
-// ExportedEvent is one exported event (GET /api/v1/events/export) — the
+// ExportedEvent is one exported event (GET /api/v1/events/export), the
 // platform's own recorded fields, keyed by its own external user id.
 type ExportedEvent struct {
 	ID         string `json:"id"`
@@ -977,7 +977,7 @@ type ExportedEvent struct {
 }
 
 // EventExportPayload is the cursor-paginated payload from
-// GET /api/v1/events/export (oldest first — ledger order).
+// GET /api/v1/events/export (oldest first: ledger order).
 type EventExportPayload struct {
 	Data       []ExportedEvent `json:"data"`
 	NextCursor *string         `json:"nextCursor"`
@@ -1007,7 +1007,7 @@ const (
 )
 
 // Additional event types the read-only what-if projection accepts
-// (ProjectScore). The projection takes the FULL vocabulary — it writes nothing,
+// (ProjectScore). The projection takes the FULL vocabulary: it writes nothing,
 // so the dispute outcomes the API produces itself are modellable too, as is
 // EventContractBreached above (the strongest negative signal in the formula).
 // A platform cannot report these two via ReportEvent.
@@ -1028,7 +1028,7 @@ var IngestEventTypes = []string{
 	EventTransactionDisputed,
 }
 
-// ProjectionEventTypes is every event type ProjectScore accepts — a superset of
+// ProjectionEventTypes is every event type ProjectScore accepts, a superset of
 // IngestEventTypes.
 var ProjectionEventTypes = []string{
 	EventTransactionCompleted,
@@ -1086,7 +1086,7 @@ type BatchEventResultItem struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// BatchEventsResult comes from POST /api/v1/events/batch — partial success,
+// BatchEventsResult comes from POST /api/v1/events/batch: partial success,
 // one entry per input event.
 type BatchEventsResult struct {
 	Total     int                    `json:"total"`
@@ -1152,7 +1152,7 @@ type WebhookConfig struct {
 }
 
 // CreateWebhookResult carries the new webhook plus its signing secret, which
-// is shown ONCE — store it to verify deliveries.
+// is shown ONCE. Store it to verify deliveries.
 type CreateWebhookResult struct {
 	Webhook WebhookConfig `json:"webhook"`
 	Secret  string        `json:"secret"`
@@ -1218,10 +1218,10 @@ type RecentWebhookEventDelivery struct {
 
 // RecentWebhookEvent is one item from GET /api/v1/webhooks/deliveries: the
 // delivery envelope exactly as sent, plus provenance. IsExample is true for a
-// representative payload from the event catalog — sample data, NOT a delivery
+// representative payload from the event catalog: sample data, NOT a delivery
 // that occurred. Never present an example as a real outcome.
 type RecentWebhookEvent struct {
-	// ID is the event id — stable across retries and replays. Dedupe on it.
+	// ID is the event id, stable across retries and replays. Dedupe on it.
 	ID        string                      `json:"id"`
 	Type      string                      `json:"type"`
 	Livemode  bool                        `json:"livemode"`
@@ -1244,7 +1244,7 @@ type RecentWebhookEventsResult struct {
 
 // ScoreMonitor is an edge-triggered threshold/band watch on one of your users.
 // UserID is the platform's own externalId. Monitors are notification config
-// only — a monitor never affects a score.
+// only: a monitor never affects a score.
 type ScoreMonitor struct {
 	ID     string `json:"id"`
 	UserID string `json:"userId"`
@@ -1260,7 +1260,7 @@ type ScoreMonitor struct {
 	UpdatedAt       string  `json:"updatedAt"`
 }
 
-// CreateMonitorInput is the body for CreateMonitor — at least one condition
+// CreateMonitorInput is the body for CreateMonitor: at least one condition
 // (BelowScore, AboveScore, or OnBandChange) is required.
 type CreateMonitorInput struct {
 	UserID       string   `json:"userId"`
@@ -1270,7 +1270,7 @@ type CreateMonitorInput struct {
 }
 
 // UpdateMonitorInput patches a monitor. Nil fields are omitted; to clear a
-// threshold send an explicit JSON null via a custom body — or deactivate and
+// threshold send an explicit JSON null via a custom body, or deactivate and
 // recreate. The updated monitor must keep at least one condition.
 type UpdateMonitorInput struct {
 	BelowScore   *float64 `json:"belowScore,omitempty"`
@@ -1355,7 +1355,7 @@ const (
 )
 
 // MappingFieldRule is the object form of a field rule. A bare dot-path string
-// is also accepted on the wire — use MappingPath for that shorthand.
+// is also accepted on the wire. Use MappingPath for that shorthand.
 // Transform holds a single transform name or a []string of them, applied
 // left-to-right BEFORE the Values lookup.
 type MappingFieldRule struct {
@@ -1373,12 +1373,12 @@ type MappingPath string
 // IngestMapping declares how to reach Credda's event fields from YOUR record
 // shape. Keys are Credda fields (userId, eventType, dueDate, completedAt,
 // stakeLevel, isVerified, transactionValue, metadata, idempotencyKey) plus
-// verifiedBy — the counterparty/witness identifier that licenses
+// verifiedBy, the counterparty/witness identifier that licenses
 // isVerified: true. Without it a record still ingests, with isVerified false
 // and a warning. Values are a MappingPath or a MappingFieldRule.
 type IngestMapping map[string]any
 
-// IngestResultItem is one record's outcome. Records fail INDIVIDUALLY — a bad
+// IngestResultItem is one record's outcome. Records fail INDIVIDUALLY: a bad
 // record never fails the rest. Status is one of created, duplicate, failed.
 type IngestResultItem struct {
 	Index   int    `json:"index"`
@@ -1386,7 +1386,7 @@ type IngestResultItem struct {
 	Status  string `json:"status"`
 	EventID string `json:"eventId,omitempty"`
 	Error   string `json:"error,omitempty"`
-	// Non-fatal notes — most commonly an isVerified downgrade.
+	// Non-fatal notes: most commonly an isVerified downgrade.
 	Warnings []string `json:"warnings,omitempty"`
 }
 
@@ -1425,7 +1425,7 @@ type MappingListResult struct {
 type ImportJob struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
-	// Data rows in the file (never truncated — an over-cap file is refused).
+	// Data rows in the file (never truncated: an over-cap file is refused).
 	TotalRows    int `json:"totalRows"`
 	CreatedCount int `json:"createdCount"`
 	// Rows already present under their idempotency key (a safe re-upload).
@@ -1503,7 +1503,7 @@ type AgentOperatorInput struct {
 // RegisterAgentInput is the body of POST /api/v1/agents.
 type RegisterAgentInput struct {
 	UserID string `json:"userId"`
-	// OperatedByReportingPlatform nil means the server default (true — the
+	// OperatedByReportingPlatform nil means the server default (true, the
 	// conservative reading, under which your own reports are never confirmed
 	// evidence for this agent).
 	OperatedByReportingPlatform *bool `json:"operatedByReportingPlatform,omitempty"`
@@ -1529,7 +1529,7 @@ type AgentSubject struct {
 type DeliveryRecord struct {
 	Deliveries int `json:"deliveries"`
 	// ConfirmedDeliveries counts only outcomes a DISTINCT counterparty
-	// attested — the only ones that are evidence.
+	// attested, the only ones that are evidence.
 	ConfirmedDeliveries   int `json:"confirmedDeliveries"`
 	UnconfirmedDeliveries int `json:"unconfirmedDeliveries"`
 	// SelfAttestedDeliveries were reported by the agent's own declared
@@ -1538,24 +1538,24 @@ type DeliveryRecord struct {
 	Failures               int `json:"failures"`
 	Disputes               int `json:"disputes"`
 	// OnTimeConfirmedDeliveries and OnTimeRate are nil when nothing is
-	// confirmed yet — an absent rate is not a perfect one.
+	// confirmed yet: an absent rate is not a perfect one.
 	OnTimeConfirmedDeliveries *int     `json:"onTimeConfirmedDeliveries"`
 	OnTimeRate                *float64 `json:"onTimeRate"`
 	FirstRecordedAt           *string  `json:"firstRecordedAt"`
 	LastRecordedAt            *string  `json:"lastRecordedAt"`
 }
 
-// DeliveryRecordDisclaimer states what a delivery record is — and what it is not.
+// DeliveryRecordDisclaimer states what a delivery record is, and what it is not.
 type DeliveryRecordDisclaimer struct {
 	IsA             string   `json:"isA"`
 	IsNot           []string `json:"isNot"`
 	SelfDealingRule string   `json:"selfDealingRule"`
 }
 
-// AgentScore is the subject's current deterministic score — the identical
+// AgentScore is the subject's current deterministic score, the identical
 // formula every subject runs through.
 // FinalScore and ScoreBand are POINTERS because a subject may have no computed
-// score yet. They are nil in that case — never a placeholder. Decoding them as
+// score yet. They are nil in that case, never a placeholder. Decoding them as
 // float64/string would turn a JSON null into 0/"", i.e. a score of zero.
 type AgentScore struct {
 	FinalScore     *float64 `json:"finalScore"`

@@ -13,7 +13,7 @@ import (
 
 // ─── Types: book query / export (GET /api/v1/users) ─────────────────────────
 
-// SubjectSummary is one subject in your book — operational fields only.
+// SubjectSummary is one subject in your book, operational fields only.
 //
 // FinalScore and ScoreBand are POINTERS because a subject can be in your book
 // (you have reported events for them) while the engine has not yet produced a
@@ -50,7 +50,7 @@ type ListUsersPayload struct {
 //
 // HasScore=false selects exactly the subjects still awaiting a first score, and
 // cannot be combined with ScoreMin/ScoreMax/Band (an unscored subject has no
-// score to compare) — the server refuses that pair with a 400 rather than
+// score to compare): the server refuses that pair with a 400 rather than
 // returning a confidently empty page.
 type BookFilterQuery struct {
 	ScoreMin          *float64
@@ -87,7 +87,7 @@ type BookSummaryBand struct {
 }
 
 // BookSummaryCentral is the central tendency over a segment's SCORED subjects.
-// Both members are nil when nothing in the segment is scored — a 0 there would
+// Both members are nil when nothing in the segment is scored: a 0 there would
 // read as a real, catastrophic score rather than "nothing has been scored yet".
 type BookSummaryCentral struct {
 	Median *float64 `json:"median"`
@@ -102,7 +102,7 @@ type BookSummaryAggregationSkipped struct {
 
 // BookSummaryPayload is the counts + score shape for a segment of your book.
 // Matched is always exact; the aggregates are nil only when the population
-// exceeded the server's fold cap, in which case AggregationSkipped says so — a
+// exceeded the server's fold cap, in which case AggregationSkipped says so. A
 // partial aggregate is never presented as a whole-segment one.
 type BookSummaryPayload struct {
 	FormulaVersion     string                         `json:"formulaVersion"`
@@ -155,7 +155,7 @@ type TrustSummaryAI struct {
 }
 
 // TrustSummaryPayload is a deterministic, evidence-based trust summary. It
-// explains; it never decides — there is no verdict endpoint by design.
+// explains; it never decides. There is no verdict endpoint by design.
 type TrustSummaryPayload struct {
 	UserID         string                `json:"userId"`
 	Available      bool                  `json:"available"`
@@ -268,7 +268,7 @@ type BenchmarkDistributionPayload struct {
 	MinimumCohortSize int                  `json:"minimumCohortSize,omitempty"`
 }
 
-// UserBenchmarkPayload is GET /api/v1/users/:id/benchmark — where the subject
+// UserBenchmarkPayload is GET /api/v1/users/:id/benchmark, where the subject
 // sits within its cohort. When Available is false, Reason is "insufficient_data"
 // (cohort below the floor) or "no_score" (subject not scored yet). A percentile
 // is not a verdict.
@@ -338,7 +338,7 @@ type ConfirmationRequest struct {
 	Description       *string  `json:"description"`
 	// ReturnURL is the post-decision redirect configured for the HOSTED page
 	// (nil when unset). It is the requesting platform's own configuration and is
-	// never shown to the counterparty — the hosted page reads it server-side.
+	// never shown to the counterparty: the hosted page reads it server-side.
 	ReturnURL        *string `json:"returnUrl"`
 	Status           string  `json:"status"`
 	ExpiresAt        string  `json:"expiresAt"`
@@ -363,7 +363,7 @@ type CreateConfirmationInput struct {
 	Description      string         `json:"description,omitempty"`
 	// ReturnURL sends the counterparty back to your own page after they decide
 	// on the HOSTED page. Must be an absolute https URL on a public host with no
-	// embedded credentials — loopback/private/link-local destinations are
+	// embedded credentials: loopback/private/link-local destinations are
 	// refused (400). The redirect carries `credda_confirmation=confirmed|declined`
 	// and NOTHING else: never the token, the subject id, the counterparty ref,
 	// or a score.
@@ -372,11 +372,11 @@ type CreateConfirmationInput struct {
 }
 
 // ConfirmationCreateResult is the result of CreateConfirmationRequest. The token
-// is shown ONCE — deliver it to the counterparty over your own channel.
+// is shown ONCE. Deliver it to the counterparty over your own channel.
 type ConfirmationCreateResult struct {
 	Confirmation      ConfirmationRequest `json:"confirmation"`
 	ConfirmationToken string              `json:"confirmationToken"`
-	// ConfirmURL is Credda's HOSTED confirmation page — the zero-frontend path.
+	// ConfirmURL is Credda's HOSTED confirmation page, the zero-frontend path.
 	// It is server-rendered, ships no JavaScript and needs no account. Credda
 	// never delivers this link: you do, over your own channel.
 	ConfirmURL string `json:"confirmUrl"`
@@ -390,7 +390,7 @@ type ConfirmationResult struct {
 	Confirmation ConfirmationRequest `json:"confirmation"`
 }
 
-// ConfirmationBatchItemResult is one entry in a ConfirmationBatchResult —
+// ConfirmationBatchItemResult is one entry in a ConfirmationBatchResult:
 // partial success. An ok item carries its one-time token + hosted confirmUrl; a
 // failed one carries the reason + code (e.g. CONFIRMATION_SELF). No item writes
 // anything to the ledger.
@@ -402,7 +402,7 @@ type ConfirmationBatchItemResult struct {
 	ID string `json:"id,omitempty"`
 	// Status is PENDING (ok items only).
 	Status string `json:"status,omitempty"`
-	// ConfirmationToken is the one-time token — shown ONCE, deliver it to the
+	// ConfirmationToken is the one-time token: shown ONCE, deliver it to the
 	// counterparty (ok items only).
 	ConfirmationToken string `json:"confirmationToken,omitempty"`
 	// ConfirmURL is the hosted "Confirm with Credda" page for this request (ok
@@ -414,7 +414,7 @@ type ConfirmationBatchItemResult struct {
 	Code string `json:"code,omitempty"`
 }
 
-// ConfirmationBatchResult is the result of CreateConfirmationBatch — partial
+// ConfirmationBatchResult is the result of CreateConfirmationBatch: partial
 // success, one entry per input request. Nothing is written to the ledger by any
 // item until its named counterparty confirms.
 type ConfirmationBatchResult struct {
@@ -477,7 +477,7 @@ type ReferenceRequest struct {
 	Description       *string `json:"description"`
 	// ReturnURL is the post-decision redirect configured for the HOSTED page
 	// (nil when unset). It is the requesting platform's own configuration and is
-	// never shown to the counterparty — the hosted page reads it server-side.
+	// never shown to the counterparty: the hosted page reads it server-side.
 	ReturnURL        *string `json:"returnUrl"`
 	Status           string  `json:"status"`
 	ExpiresAt        string  `json:"expiresAt"`
@@ -509,18 +509,18 @@ type CreateReferenceInput struct {
 	ClaimRef string `json:"claimRef,omitempty"`
 	// ReturnURL sends the reference back to your own page after they decide on
 	// the HOSTED page. Must be an absolute https URL on a public host with no
-	// embedded credentials — loopback/private/link-local destinations are
+	// embedded credentials: loopback/private/link-local destinations are
 	// refused (400).
 	ReturnURL     string `json:"returnUrl,omitempty"`
 	ExpiresInDays *int   `json:"expiresInDays,omitempty"`
 }
 
 // ReferenceCreateResult is the result of CreateReferenceRequest. The token is
-// shown ONCE — deliver it to the named reference over your own channel.
+// shown ONCE. Deliver it to the named reference over your own channel.
 type ReferenceCreateResult struct {
 	Reference      ReferenceRequest `json:"reference"`
 	ReferenceToken string           `json:"referenceToken"`
-	// ReferenceURL is Credda's HOSTED reference page — the zero-frontend path.
+	// ReferenceURL is Credda's HOSTED reference page, the zero-frontend path.
 	// Credda never delivers this link: you do, over your own channel.
 	ReferenceURL string `json:"referenceUrl"`
 	// PreviewURL / RespondURL are for platforms building their own UI instead.
@@ -635,8 +635,8 @@ type PolicyConditionUnreachable struct {
 // CreatePolicyInput is the body for CreatePolicy. Set exactly one of UserID
 // (watch one subject) or AppliesToAll (watch all your subjects). Metric is one
 // of "score" / "component" / "band" / "verified_events"; supply the condition
-// its metric requires (Direction — "up"/"down" for crossings, "enter"/"leave"
-// for bands — plus Threshold / Component / Band).
+// its metric requires (Direction: "up"/"down" for crossings, "enter"/"leave"
+// for bands, plus Threshold / Component / Band).
 type CreatePolicyInput struct {
 	Name         string   `json:"name"`
 	UserID       string   `json:"userId,omitempty"`
@@ -673,7 +673,7 @@ type ThresholdPolicyListResult struct {
 
 // ─── Types: Open Badges 3.0 ─────────────────────────────────────────────────
 
-// OpenBadgeAchievementsPayload is GET /api/v1/open-badges/achievements — the
+// OpenBadgeAchievementsPayload is GET /api/v1/open-badges/achievements, the
 // closed, signable set. Achievements follow the Open Badges 3.0 Achievement
 // shape and are left loosely typed.
 type OpenBadgeAchievementsPayload struct {
@@ -685,7 +685,7 @@ type OpenBadgeAchievementsPayload struct {
 
 // ─── Public reads (no API key) ──────────────────────────────────────────────
 
-// GetBenchmarks fetches the public benchmark catalog — cohort dimensions and the
+// GetBenchmarks fetches the public benchmark catalog: cohort dimensions and the
 // k-anonymity floor. GET /api/v1/benchmarks. No API key required. A benchmark is
 // a distribution fact, never a verdict.
 func (c *Client) GetBenchmarks(ctx context.Context) (*BenchmarkCatalog, error) {
@@ -698,7 +698,7 @@ func (c *Client) GetBenchmarks(ctx context.Context) (*BenchmarkCatalog, error) {
 
 // GetOpenBadgeAchievements fetches the closed set of Open Badges 3.0 achievements
 // the Credda issuer key will sign. GET /api/v1/open-badges/achievements. Public,
-// no key — every signed credential's achievement.id resolves here.
+// no key: every signed credential's achievement.id resolves here.
 func (c *Client) GetOpenBadgeAchievements(ctx context.Context) (*OpenBadgeAchievementsPayload, error) {
 	var out OpenBadgeAchievementsPayload
 	if err := c.get(ctx, "/open-badges/achievements", false, &out); err != nil {
@@ -718,10 +718,10 @@ func (c *Client) GetOpenBadgeAchievement(ctx context.Context, badgeID string) (m
 	return out, nil
 }
 
-// GetCredentialIssuerMetadata fetches the OID4VCI issuer discovery document — the
+// GetCredentialIssuerMetadata fetches the OID4VCI issuer discovery document, the
 // doc a wallet reads first. GET /.well-known/openid-credential-issuer. Public, no
-// key. Minting the offer that starts the flow is a keyed call — see
-// CreateCredentialOffer.
+// key. Minting the offer that starts the flow is a keyed call (see
+// CreateCredentialOffer).
 func (c *Client) GetCredentialIssuerMetadata(ctx context.Context) (*CredentialIssuerMetadata, error) {
 	var out CredentialIssuerMetadata
 	if err := c.getWellKnown(ctx, "/.well-known/openid-credential-issuer", &out); err != nil {
@@ -732,7 +732,7 @@ func (c *Client) GetCredentialIssuerMetadata(ctx context.Context) (*CredentialIs
 
 // ─── Platform reads (API key required) ──────────────────────────────────────
 
-// ListUsers queries and exports your book of subjects — a cursor-paginated page
+// ListUsers queries and exports your book of subjects, a cursor-paginated page
 // of the subjects you have reported events for, with a closed filter set. Pass
 // nil for no filters. GET /api/v1/users. Requires scores:read; a test key lists
 // only the test population.
@@ -754,7 +754,7 @@ func (c *Client) ListUsers(ctx context.Context, query *ListUsersQuery) (*ListUse
 
 // applyBookFilters serializes the closed book filter set. Shared by ListUsers
 // and GetBookSummary so the two surfaces can never disagree about the filter
-// vocabulary — the same reason the server parses both with one function.
+// vocabulary, the same reason the server parses both with one function.
 func applyBookFilters(qs url.Values, f *BookFilterQuery) {
 	if f == nil {
 		return
@@ -793,7 +793,7 @@ func (c *Client) GetBookSummary(ctx context.Context, filters *BookFilterQuery) (
 }
 
 // GetTrustSummary returns a deterministic, evidence-based trust summary for a
-// subject — summary + strengths + risks drawn only from recorded evidence, with
+// subject: summary + strengths + risks drawn only from recorded evidence, with
 // a standing advisory that this is evidence, not a recommendation. Pass
 // narrative=true to also attach an advisory AI retelling (inert unless the
 // server has AI configured). GET /api/v1/users/:id/trust-summary.
@@ -825,7 +825,7 @@ func (c *Client) GetBenchmarkDistribution(ctx context.Context, dimension, cohort
 	return &out, nil
 }
 
-// GetUserBenchmark returns where a single subject sits within a cohort — their
+// GetUserBenchmark returns where a single subject sits within a cohort: their
 // percentile rank plus the cohort's aggregate distribution. Available=false with
 // Reason "insufficient_data" (cohort below the floor) or "no_score" (subject not
 // scored yet). Pass an empty dimension for the default. This is the REAL
@@ -872,7 +872,7 @@ func (c *Client) ReplayWebhookDelivery(ctx context.Context, webhookID, deliveryI
 
 // CreateConfirmationRequest proposes an outcome for counterparty confirmation. It
 // writes NO event and touches NO score; it returns a one-time confirmation token
-// (shown ONCE — deliver it to the counterparty yourself) plus preview/respond
+// (shown ONCE: deliver it to the counterparty yourself) plus preview/respond
 // URLs. Pass a stable idempotencyKey (empty string to omit) to make retries
 // exactly-once. POST /api/v1/confirmations. Requires events:write.
 func (c *Client) CreateConfirmationRequest(ctx context.Context, input CreateConfirmationInput, idempotencyKey string) (*ConfirmationCreateResult, error) {
@@ -887,14 +887,14 @@ func (c *Client) CreateConfirmationRequest(ctx context.Context, input CreateConf
 	return &out, nil
 }
 
-// CreateConfirmationBatch is the ACTIVATION ENGINE — bulk-create up to 100
+// CreateConfirmationBatch is the ACTIVATION ENGINE: bulk-create up to 100
 // confirmation requests in one call. Turn your BOOK of historical relationships
 // (past jobs, placements, engagements, projects) into pending counterparty asks,
 // warming a cold ledger. Each item is exactly a CreateConfirmationInput and flows
-// through the SAME create path, so isVerified is still earned only on confirm — a
+// through the SAME create path, so isVerified is still earned only on confirm. A
 // batch item writes NOTHING to the ledger until its named counterparty confirms.
 //
-// Partial success: Results lists each item's outcome by Index — an ok item carries
+// Partial success: Results lists each item's outcome by Index. An ok item carries
 // its one-time token + hosted confirmUrl; a failed one carries the reason + code
 // (e.g. CONFIRMATION_SELF). Pass a stable idempotencyKey (empty string to omit) so
 // a retried batch replays instead of duplicating. POST /api/v1/confirmations/batch.
@@ -946,7 +946,7 @@ func (c *Client) CancelConfirmation(ctx context.Context, id string) (*Confirmati
 	return &out, nil
 }
 
-// PreviewConfirmation returns what the counterparty is being asked to confirm — a
+// PreviewConfirmation returns what the counterparty is being asked to confirm, a
 // PII-free subset (never the raw subject id). Token-gated; NO API key.
 // GET /api/v1/confirmations/:id/preview?token=….
 func (c *Client) PreviewConfirmation(ctx context.Context, id, token string) (*ConfirmationPreviewResult, error) {
@@ -960,7 +960,7 @@ func (c *Client) PreviewConfirmation(ctx context.Context, id, token string) (*Co
 }
 
 // RespondToConfirmation submits the counterparty's decision, presented with the
-// raw token — NO API key. decision is "confirm" (the proposed event is written,
+// raw token (NO API key). decision is "confirm" (the proposed event is written,
 // verified, and EventID is returned) or "decline" (nothing is written).
 // Single-use. POST /api/v1/confirmations/:id/respond.
 func (c *Client) RespondToConfirmation(ctx context.Context, id, token, decision string) (*ConfirmationRespondResult, error) {
@@ -977,7 +977,7 @@ func (c *Client) RespondToConfirmation(ctx context.Context, id, token, decision 
 // CreateReferenceRequest proposes a résumé claim (employment / education /
 // certification / skill) for the named third party who was there to confirm. It
 // records NO qualification and touches NO score; it returns a one-time reference
-// token (shown ONCE — deliver it to the reference yourself) plus preview/respond
+// token (shown ONCE: deliver it to the reference yourself) plus preview/respond
 // URLs. Pass a stable idempotencyKey (empty string to omit) to make retries
 // exactly-once. POST /api/v1/references. Requires events:write.
 func (c *Client) CreateReferenceRequest(ctx context.Context, input CreateReferenceInput, idempotencyKey string) (*ReferenceCreateResult, error) {
@@ -1026,7 +1026,7 @@ func (c *Client) CancelReference(ctx context.Context, id string) (*ReferenceResu
 	return &out, nil
 }
 
-// PreviewReference returns what the counterparty is being asked to confirm — a
+// PreviewReference returns what the counterparty is being asked to confirm, a
 // PII-free subset (never the raw subject id or the counterpartyRef matching
 // key). Token-gated; NO API key. GET /api/v1/references/:id/preview?token=….
 func (c *Client) PreviewReference(ctx context.Context, id, token string) (*ReferencePreviewResult, error) {
@@ -1040,7 +1040,7 @@ func (c *Client) PreviewReference(ctx context.Context, id, token string) (*Refer
 }
 
 // RespondToReference submits the reference's decision, presented with the raw
-// token — NO API key. decision is "confirm" (the qualification is recorded,
+// token (NO API key). decision is "confirm" (the qualification is recorded,
 // verified, and EventID is returned) or "decline" (nothing is written).
 // Single-use. A qualification never moves the reliability score.
 // POST /api/v1/references/:id/respond.
@@ -1055,7 +1055,7 @@ func (c *Client) RespondToReference(ctx context.Context, id, token, decision str
 
 // ─── Threshold policies (declarative decision triggers) ─────────────────────
 
-// CreatePolicy creates a threshold policy — a "notify me when a subject crosses
+// CreatePolicy creates a threshold policy, a "notify me when a subject crosses
 // THIS line" rule that delivers a policy.threshold_crossed webhook. A policy
 // never reads into, blocks, or changes a score. POST /api/v1/policies. Uses the
 // webhooks scope.
@@ -1090,7 +1090,7 @@ func (c *Client) GetPolicy(ctx context.Context, id string) (*ThresholdPolicyResu
 }
 
 // UpdatePolicy retunes a policy (name / direction / threshold / component / band
-// / isActive). The metric is immutable — to change it, delete and recreate.
+// / isActive). The metric is immutable: to change it, delete and recreate.
 // PATCH /api/v1/policies/:id.
 func (c *Client) UpdatePolicy(ctx context.Context, id string, patch UpdatePolicyInput) (*ThresholdPolicyResult, error) {
 	var out ThresholdPolicyResult
@@ -1100,7 +1100,7 @@ func (c *Client) UpdatePolicy(ctx context.Context, id string, patch UpdatePolicy
 	return &out, nil
 }
 
-// DeletePolicy deletes a policy (hard delete — it is config, not ledger data).
+// DeletePolicy deletes a policy (hard delete: it is config, not ledger data).
 // DELETE /api/v1/policies/:id.
 func (c *Client) DeletePolicy(ctx context.Context, id string) error {
 	return c.delete(ctx, "/policies/"+esc(id))
@@ -1111,7 +1111,7 @@ func (c *Client) DeletePolicy(ctx context.Context, id string) error {
 // ChangelogEntry is one dated change from GET /api/v1/changelog.
 type ChangelogEntry struct {
 	ID string `json:"id"`
-	// Date is an ISO date (YYYY-MM-DD) — the release date, because the API
+	// Date is an ISO date (YYYY-MM-DD), the release date, because the API
 	// deploys on merge.
 	Date string `json:"date"`
 	// Category is one of "added" / "changed" / "deprecated" / "fixed" / "security".
@@ -1123,7 +1123,7 @@ type ChangelogEntry struct {
 }
 
 // DeprecationNotice is a scheduled removal. The list is empty while nothing is
-// deprecated — which is not the same as unavailable.
+// deprecated, which is not the same as unavailable.
 type DeprecationNotice struct {
 	Path        string   `json:"path"`
 	Methods     []string `json:"methods,omitempty"`
@@ -1161,7 +1161,7 @@ type VersioningContract struct {
 	Deprecation       DeprecationPolicy `json:"deprecation"`
 }
 
-// APIChangelog is GET /api/v1/changelog — the version contract plus every dated
+// APIChangelog is GET /api/v1/changelog, the version contract plus every dated
 // change, newest first.
 type APIChangelog struct {
 	APIVersion   string              `json:"apiVersion"`
@@ -1180,7 +1180,7 @@ type APIChangelog struct {
 // CLAIMED record (education, skills, certifications, employment) is
 // independently third-party verified.
 //
-// THE BRIGHT LINE: this can never move the Reliability Score — qualification
+// THE BRIGHT LINE: this can never move the Reliability Score. Qualification
 // events are structurally excluded from the score formula. It counts WHETHER a
 // claim is verified, never how prestigious it is: no school, employer, degree or
 // credential is ranked or weighted, deliberately.
@@ -1189,7 +1189,7 @@ type APIChangelog struct {
 type QualificationBreakdown struct {
 	Claimed  int `json:"claimed"`
 	Verified int `json:"verified"`
-	// VerificationDepth is verified ÷ claimed. Nil — never 0 — when nothing is
+	// VerificationDepth is verified ÷ claimed. Nil (never 0) when nothing is
 	// claimed in this category.
 	VerificationDepth *float64 `json:"verificationDepth"`
 }
@@ -1210,7 +1210,7 @@ type VerifiedProfilePayload struct {
 	Categories map[string]QualificationBreakdown `json:"categories"`
 	Totals     QualificationTotals               `json:"totals"`
 	// VerificationDepth is the share of the WHOLE claimed record that is
-	// independently verified. Equal weight per claim — no prestige, no ranking.
+	// independently verified. Equal weight per claim: no prestige, no ranking.
 	// Nil when nothing is claimed.
 	VerificationDepth *float64 `json:"verificationDepth"`
 	Note              string   `json:"note"`
@@ -1228,18 +1228,18 @@ type RecordQualificationInput struct {
 	// Issuer is a free-text institution/employer. Carried for display; NEVER ranked.
 	Issuer string `json:"issuer,omitempty"`
 	// VerifiedBy names the third-party witness. Required for the claim to count
-	// as verified — there is deliberately no "isVerified" field to set.
+	// as verified: there is deliberately no "isVerified" field to set.
 	VerifiedBy string `json:"verifiedBy,omitempty"`
 	// ClaimRef is a stable, caller-chosen identity for THIS claim (1..200).
 	// Claims sharing (Category, ClaimRef) resolve to ONE claim, so syncing the
-	// same claim twice — self-attested when the user enters it, verified when a
-	// counterparty confirms it — counts once (verified wins). Empty means one
+	// same claim twice (self-attested when the user enters it, verified when a
+	// counterparty confirms it) counts once (verified wins). Empty means one
 	// call is one claim, exactly as before.
 	ClaimRef string `json:"claimRef,omitempty"`
 	// Retract records a RETRACTION MARKER for (Category, ClaimRef) instead of a
 	// claim, withdrawing it from the measure and the itemized record. It
 	// REQUIRES ClaimRef (400 without it), and any VerifiedBy sent alongside is
-	// IGNORED — a retraction is never verified. The ledger stays append-only:
+	// IGNORED. A retraction is never verified. The ledger stays append-only:
 	// nothing is deleted, the marker is one more event, and a claim a witness
 	// already confirmed is permanent record.
 	Retract bool `json:"retract,omitempty"`
@@ -1269,7 +1269,7 @@ type RecordQualificationInput struct {
 	// IsVerified; "HIGH_COST_REGISTRY" may verify the exact fact a register
 	// holds and nothing broader; "AUTHORITATIVE_SYSTEM_OF_RECORD" may verify
 	// unless the subject administers the source; "HUMAN_CONFIRMATION" is
-	// unchanged. The gate is a one-way valve — a stronger tier can never raise a
+	// unchanged. The gate is a one-way valve: a stronger tier can never raise a
 	// claim above what the witness rule already supports.
 	ProvenanceTier string `json:"provenanceTier,omitempty"`
 	// ProvenanceCitationURI is a citable public http(s) link to the asserting
@@ -1328,7 +1328,7 @@ type RecordQualificationResult struct {
 //
 // A worker-OWNED, résumé-shaped summary of a VERIFIED work record: reliability
 // band, verified-outcome counts, verification depth, tenure. Pure derivation over
-// the ledger the score already reads — no new scoring logic, nothing here can
+// the ledger the score already reads: no new scoring logic, nothing here can
 // move a score.
 //
 // It describes the record the subject chose to present. It is NOT a hiring,
@@ -1363,14 +1363,14 @@ type ProfessionalRecordReliability struct {
 type ProfessionalRecordExperience struct {
 	VerifiedOutcomes int `json:"verifiedOutcomes"`
 	TotalOutcomes    int `json:"totalOutcomes"`
-	// VerificationDepth is verified ÷ total. Nil — the honest answer, not 0 —
+	// VerificationDepth is verified ÷ total. Nil (the honest answer, not 0)
 	// when there is no record yet.
 	VerificationDepth *float64 `json:"verificationDepth"`
 	VerifiedPlatforms int      `json:"verifiedPlatforms"`
 }
 
 // ProfessionalRecordTenure is the OBSERVED span of the record. A missing figure
-// is nil, never a default — nothing is extrapolated.
+// is nil, never a default: nothing is extrapolated.
 type ProfessionalRecordTenure struct {
 	FirstRecordedAt *string `json:"firstRecordedAt"`
 	FirstVerifiedAt *string `json:"firstVerifiedAt"`
@@ -1391,7 +1391,7 @@ type ProfessionalRecordProvenance struct {
 	ComputedAt     *string `json:"computedAt"`
 }
 
-// ProfessionalRecord is the derived summary — also the block embedded in the
+// ProfessionalRecord is the derived summary, also the block embedded in the
 // public verify payload.
 type ProfessionalRecord struct {
 	ProfessionalRecordVersion string                        `json:"professionalRecordVersion"`
@@ -1412,7 +1412,7 @@ type ProfessionalRecordPayload struct {
 }
 
 // PublicProfessionalRecordPayload is
-// GET /api/v1/verify/:token?scope=full&professional=1 — the public trust payload
+// GET /api/v1/verify/:token?scope=full&professional=1, the public trust payload
 // with the professional-record block attached. ProfessionalRecord is nil if it
 // cannot be derived (the block is fail-safe).
 type PublicProfessionalRecordPayload struct {
@@ -1424,7 +1424,7 @@ type PublicProfessionalRecordPayload struct {
 
 // ─── Types: worker reliability report ────────────────────────────────────────
 
-// ReliabilityReportOutcome is one recent outcome in the report — flagged verified
+// ReliabilityReportOutcome is one recent outcome in the report, flagged verified
 // vs self-reported.
 type ReliabilityReportOutcome struct {
 	EventType  string `json:"eventType"`
@@ -1475,7 +1475,7 @@ type ReliabilityReportReliability struct {
 }
 
 // ReliabilityReportMetrics are the underlying rates. Recency is nil when the
-// record has no dated activity — never 0.
+// record has no dated activity, never 0.
 //
 // ⚠️ UNMEASURED IS NOT ZERO. Every rate here is a POINTER, and nil means NOT
 // MEASURED:
@@ -1521,17 +1521,17 @@ type ReliabilityReportExperience struct {
 	Tenure            ProfessionalRecordTenure `json:"tenure"`
 }
 
-// ReliabilityReportBenchmark is the coarse cohort comparison — nil unless
+// ReliabilityReportBenchmark is the coarse cohort comparison, nil unless
 // requested and available.
 type ReliabilityReportBenchmark struct {
 	Cohort     string `json:"cohort"`
 	Comparison string `json:"comparison"`
 }
 
-// ReliabilityReport is the consolidated decision-support dossier — an AGGREGATION
+// ReliabilityReport is the consolidated decision-support dossier, an AGGREGATION
 // of already-computed values that carries no new score.
 //
-// It is EVIDENCE a reader weighs against their own criteria — NOT a hire / place /
+// It is EVIDENCE a reader weighs against their own criteria, NOT a hire / place /
 // rank / approve verdict, a background check, or a consumer report. The
 // disclosures travel on every payload.
 type ReliabilityReport struct {
@@ -1556,7 +1556,7 @@ type ReliabilityReportPayload struct {
 }
 
 // PublicReliabilityReportPayload is
-// GET /api/v1/verify/:token/reliability-report — the worker-consent variant.
+// GET /api/v1/verify/:token/reliability-report, the worker-consent variant.
 // ReliabilityReport is nil if it cannot be derived (the block is fail-safe).
 type PublicReliabilityReportPayload struct {
 	Token             string             `json:"token"`
@@ -1565,8 +1565,8 @@ type PublicReliabilityReportPayload struct {
 }
 
 // LinkedInCertification is the "Add to LinkedIn" certification deep link.
-// LinkedIn stores only the name, organization, dates, credential id and CertURL —
-// it does not import credential claims, and Note says so.
+// LinkedIn stores only the name, organization, dates, credential id and CertURL.
+// It does not import credential claims, and Note says so.
 type LinkedInCertification struct {
 	AddToProfileURL string `json:"addToProfileUrl"`
 	CertURL         string `json:"certUrl"`
@@ -1575,7 +1575,7 @@ type LinkedInCertification struct {
 }
 
 // ProfessionalRecordCredentialResult is
-// POST /api/v1/users/:id/professional-record/credential — a signed, offline-
+// POST /api/v1/users/:id/professional-record/credential, a signed, offline-
 // verifiable W3C VC-JWT on the same Ed25519 issuer key / did:web /
 // StatusList2021 revocation as every other Credda credential.
 type ProfessionalRecordCredentialResult struct {
@@ -1600,7 +1600,7 @@ type ProfessionalRecordCredentialResult struct {
 // GetChangelog fetches the API version contract and the dated changelog.
 // GET /api/v1/changelog. Public, no key.
 //
-// Versioning says exactly what "v1 is additive-only" guarantees — what can appear
+// Versioning says exactly what "v1 is additive-only" guarantees: what can appear
 // without notice (new endpoints, response fields, optional inputs, enum values,
 // error codes, webhook event types) and what would require a new major version.
 // Deprecations is empty while nothing is deprecated; a deprecated endpoint
@@ -1616,7 +1616,7 @@ func (c *Client) GetChangelog(ctx context.Context) (*APIChangelog, error) {
 
 // GetPublicProfessionalRecord fetches the subject's PROFESSIONAL RECORD behind a
 // public share token, alongside the usual public trust payload.
-// GET /api/v1/verify/:token?scope=full&professional=1. No API key — the token is
+// GET /api/v1/verify/:token?scope=full&professional=1. No API key: the token is
 // the subject's own consent to present it.
 //
 // Requests scope=full because the API serves the record block ONLY at full
@@ -1637,13 +1637,13 @@ func (c *Client) GetPublicProfessionalRecord(ctx context.Context, token string) 
 }
 
 // GetPublicReliabilityReport fetches the WORKER RELIABILITY REPORT behind a public
-// share token. GET /api/v1/verify/:token/reliability-report. Public — NO API key:
+// share token. GET /api/v1/verify/:token/reliability-report. Public, NO API key:
 // the token is the worker's own consent to hand their dossier to a prospective
 // employer. Pass a non-nil recent (1–50) to bound the recent-outcomes list and
 // benchmark=true to attach the coarse quartile-grain comparison.
 //
 // ReliabilityReport is nil if it cannot be derived (fail-safe). It is EVIDENCE a
-// reader weighs against their own criteria — NOT a hire / place / rank / approve
+// reader weighs against their own criteria, NOT a hire / place / rank / approve
 // verdict, a background check, or a consumer report.
 func (c *Client) GetPublicReliabilityReport(ctx context.Context, token string, recent *int, benchmark bool) (*PublicReliabilityReportPayload, error) {
 	qs := url.Values{}
@@ -1664,7 +1664,7 @@ func (c *Client) GetPublicReliabilityReport(ctx context.Context, token string, r
 // claimed vs verified counts, and the share of the whole claimed record that is
 // independently verified. GET /api/v1/users/:id/verified-profile.
 //
-// VerificationDepth is nil — not 0 — when nothing is claimed. This describes what
+// VerificationDepth is nil (not 0) when nothing is claimed. This describes what
 // is verified; it is not an assessment of the person.
 func (c *Client) GetVerifiedProfile(ctx context.Context, userID string) (*VerifiedProfilePayload, error) {
 	var out VerifiedProfilePayload
@@ -1680,7 +1680,7 @@ func (c *Client) GetVerifiedProfile(ctx context.Context, userID string) (*Verifi
 // The claim is ALWAYS recorded. Whether it counts as VERIFIED is decided by the
 // witness rule, never by you: set VerifiedBy to the genuine third party that
 // confirmed it. Absent (or naming the subject themselves) the claim still lands
-// on the ledger but as self-attested, with VerificationNote saying why — it does
+// on the ledger but as self-attested, with VerificationNote saying why: it does
 // not raise verification depth.
 //
 // Issuer/Label are carried for display and are never read by the measure. Writes
@@ -1705,7 +1705,7 @@ func (c *Client) GetProfessionalRecord(ctx context.Context, userID string) (*Pro
 	return &out, nil
 }
 
-// GetReliabilityReport fetches the consolidated WORKER RELIABILITY REPORT — the
+// GetReliabilityReport fetches the consolidated WORKER RELIABILITY REPORT, the
 // buy-trigger read a staffing agency or employer weighs before placing or hiring.
 // GET /api/v1/users/:id/reliability-report (requires a platform API key). It is an
 // AGGREGATION of what the engine already computed (reliability, metrics, verified
@@ -1715,7 +1715,7 @@ func (c *Client) GetProfessionalRecord(ctx context.Context, userID string) (*Pro
 //
 // Every recent outcome is flagged verified vs self_reported; self-reported
 // activity is never presented as verified. It is EVIDENCE a reader weighs against
-// their own criteria — NOT a hire / place / rank / approve verdict, a background
+// their own criteria, NOT a hire / place / rank / approve verdict, a background
 // check, or a consumer report.
 func (c *Client) GetReliabilityReport(ctx context.Context, userID string, recent *int, benchmark bool) (*ReliabilityReportPayload, error) {
 	qs := url.Values{}
@@ -1737,7 +1737,7 @@ func (c *Client) GetReliabilityReport(ctx context.Context, userID string, recent
 // the default lifetime.
 //
 // The credential rides the same Ed25519 issuer key / did:web / StatusList2021
-// revocation as every other Credda VC — verify it with any JOSE library (see the
+// revocation as every other Credda VC. Verify it with any JOSE library (see the
 // README note on offline verification).
 //
 // Also returns an "Add to LinkedIn" certification deep link. LinkedIn does not
@@ -1761,19 +1761,19 @@ func (c *Client) MintProfessionalRecordCredential(ctx context.Context, userID st
 
 // ─── Career export + outcome templates ──────────────────────────────────────
 
-// CareerExportDocument is a JSON Resume document (jsonresume.org) — the standard
+// CareerExportDocument is a JSON Resume document (jsonresume.org), the standard
 // résumé sections plus a meta.credda block (reliability summary, verification
 // depth, tenure, disclosures); every work/education/skills/certificates item
 // carries a credda extension flagging verified vs self-reported and a per-item
 // proof URL. Typed openly (a plain map) because it is a standard résumé document,
-// not a Credda-shaped payload. It describes a record — never a hiring verdict.
+// not a Credda-shaped payload. It describes a record, never a hiring verdict.
 type CareerExportDocument = map[string]any
 
-// OutcomeTemplatesCatalog is the industry outcome-template catalog — for each
+// OutcomeTemplatesCatalog is the industry outcome-template catalog: for each
 // industry, the concrete outcomes that matter, the ingest event type to report
 // each as, a suggested stake, and (the load-bearing part) WHO the third-party
-// witness is. Public, versioned, machine-readable guidance — same family as the
-// plan and webhook-event catalogs. Typed openly. Guidance only: nothing here
+// witness is. Public, versioned, machine-readable guidance (same family as the
+// plan and webhook-event catalogs). Typed openly. Guidance only: nothing here
 // scores, writes, or ranks anyone.
 type OutcomeTemplatesCatalog = map[string]any
 
@@ -1783,7 +1783,7 @@ type OutcomeTemplatesCatalog = map[string]any
 // Every item is flagged verified vs self-reported and verified items anchor to
 // the subject's public proof URL.
 //
-// It describes a record — never a hiring verdict, a background check, or a
+// It describes a record, never a hiring verdict, a background check, or a
 // consumer report.
 func (c *Client) GetCareerExport(ctx context.Context, userID string) (CareerExportDocument, error) {
 	var out CareerExportDocument
@@ -1794,7 +1794,7 @@ func (c *Client) GetCareerExport(ctx context.Context, userID string) (CareerExpo
 }
 
 // GetPublicCareerExport fetches the subject's career export behind a public share
-// token — the same JSON Resume document, consented via the token.
+// token: the same JSON Resume document, consented via the token.
 // GET /api/v1/verify/:token/career-export. No API key: the token is the subject's
 // own consent to present it. Verified items anchor to this same public proof URL.
 func (c *Client) GetPublicCareerExport(ctx context.Context, token string) (CareerExportDocument, error) {
@@ -1809,7 +1809,7 @@ func (c *Client) GetPublicCareerExport(ctx context.Context, token string) (Caree
 // industry for the whole catalog, or a slug to filter to one set.
 // GET /api/v1/outcome-templates. No API key required.
 //
-// Guidance only: a template never sets isVerified — only a genuine third-party
+// Guidance only: a template never sets isVerified. Only a genuine third-party
 // witness confirming the outcome does.
 func (c *Client) GetOutcomeTemplates(ctx context.Context, industry string) (OutcomeTemplatesCatalog, error) {
 	qs := url.Values{}
@@ -1893,7 +1893,7 @@ type DocumentAdvicePayload struct {
 
 // AnalyzeDocument advises, per structured claim, who the third-party witness is,
 // whether it counts as verified as submitted, and (read-only) how adding the
-// claims moves the score (as-submitted vs. if-all-confirmed). WRITES NOTHING — a
+// claims moves the score (as-submitted vs. if-all-confirmed). WRITES NOTHING: a
 // claim is verified only when its witness confirms, never by this call.
 // POST /api/v1/users/:id/documents/analyze.
 func (c *Client) AnalyzeDocument(ctx context.Context, userID string, claims []DocumentClaimInput) (*DocumentAdvicePayload, error) {
@@ -1926,7 +1926,7 @@ type DispatchEvidence struct {
 // DispatchReliabilityPayload is the compact pre-shift record read.
 //
 // Every pointer field is nil because the data genuinely does not exist (an
-// unscored subject, an empty ledger) — never a placeholder zero. NoShowRate in
+// unscored subject, an empty ledger), never a placeholder zero. NoShowRate in
 // particular: nil means "no outcomes recorded", which is NOT the same fact as a
 // 0.0 no-show rate earned over a real record.
 type DispatchReliabilityPayload struct {
@@ -1950,18 +1950,18 @@ type DispatchReliabilityPayload struct {
 	Disclosures        []string         `json:"disclosures"`
 }
 
-// GetDispatchReliability returns reliability at dispatch — the compact record
+// GetDispatchReliability returns reliability at dispatch, the compact record
 // read to make before assigning a shift: score/band/confidence, verified-evidence
 // counts, noShowRate, the on-time component, recency and the top ranked drivers,
 // in a sub-1KB payload. GET /api/v1/users/:id/reliability?context=dispatch.
 //
 // Read-only: it projects the score the engine already computed and counts over
-// the append-only ledger — it never computes or writes a score, and a subject
+// the append-only ledger: it never computes or writes a score, and a subject
 // that has never been scored reads nil rather than triggering a computation.
 //
 // EVIDENCE, NOT A VERDICT. No field says call / do-not-call or fit / unfit; you
 // apply your own criteria and own the decision. If you use this read to SELECT
-// workers, FCRA (or a local equivalent) may attach to that decision — scope it
+// workers, FCRA (or a local equivalent) may attach to that decision. Scope it
 // with your counsel.
 func (c *Client) GetDispatchReliability(ctx context.Context, userID string) (*DispatchReliabilityPayload, error) {
 	qs := url.Values{}
@@ -1986,7 +1986,7 @@ type UsageMeterRow struct {
 
 // UsageMetersPayload is usage in a metered-billing (Stripe Billing Meters) shape.
 // A pure reprojection of the SAME usage counters GetUsage reads: Credda emits
-// usage, your biller prices it — no score, no money. From/To are the inclusive
+// usage, your biller prices it: no score, no money. From/To are the inclusive
 // window bounds (ISO dates, YYYY-MM-DD).
 type UsageMetersPayload struct {
 	Platform struct {
@@ -2039,11 +2039,11 @@ func (c *Client) GetUsageMeters(ctx context.Context, window *AnalyticsWindow) (*
 
 // EventAnalyticsBucket is one day (Date set) or one event type (EventType set)
 // of event volume. VerifiedShare/ConfirmedShare are nil when the bucket has no
-// events — never a placeholder 0.
+// events, never a placeholder 0.
 //
 // Verified counts the raw isVerified flag, which on a directly-reported event is
 // the reporting platform's OWN assertion. Confirmed counts only events a DISTINCT
-// counterparty wrote by acting on a one-time confirmation token — the third-party
+// counterparty wrote by acting on a one-time confirmation token, the third-party
 // evidence density of an integration. Confirmed is always a subset of Verified.
 type EventAnalyticsBucket struct {
 	Date           string   `json:"date,omitempty"`
@@ -2057,7 +2057,7 @@ type EventAnalyticsBucket struct {
 
 // EventAnalyticsPayload is event volume over YOUR OWN ledger: by day (gaps
 // filled) + by type + the verified and counterparty-confirmed shares.
-// Aggregate-only — no subject identifiers appear anywhere in it.
+// Aggregate-only: no subject identifiers appear anywhere in it.
 type EventAnalyticsPayload struct {
 	Window map[string]any `json:"window"`
 	Totals struct {
@@ -2080,7 +2080,7 @@ type ScoreAnalyticsBand struct {
 }
 
 // ScoreAnalyticsPayload is the band mix, central tendency and movement over the
-// caller's subjects. Median/Mean are nil on an empty book — not 0. Aggregate-only
+// caller's subjects. Median/Mean are nil on an empty book, not 0. Aggregate-only
 // and read-only: a distribution fact about your book, never a verdict on any
 // subject, and it never moves a score.
 type ScoreAnalyticsPayload struct {
@@ -2103,10 +2103,10 @@ type ScoreAnalyticsPayload struct {
 
 // GetEventAnalytics returns event analytics over YOUR OWN ledger: volume by day
 // (gaps filled) + by type + the verified share, over a trailing days window
-// (default 30, max 365) or an explicit from/to range. Aggregate-only — no subject
+// (default 30, max 365) or an explicit from/to range. Aggregate-only: no subject
 // identifiers. Requires scores:read; test/live isolated.
 // GET /api/v1/analytics/events. Reports the verified AND counterparty-confirmed
-// shares side by side — see EventAnalyticsBucket for why they are not the same.
+// shares side by side. See EventAnalyticsBucket for why they are not the same.
 func (c *Client) GetEventAnalytics(ctx context.Context, window *AnalyticsWindow) (*EventAnalyticsPayload, error) {
 	var out EventAnalyticsPayload
 	if err := c.get(ctx, withQuery("/analytics/events", analyticsQuery(window)), true, &out); err != nil {
@@ -2118,7 +2118,7 @@ func (c *Client) GetEventAnalytics(ctx context.Context, window *AnalyticsWindow)
 // GetScoreAnalytics returns score analytics over YOUR subjects: band
 // distribution, median/mean of current scores, and how many scores moved over the
 // window. Same window controls as GetEventAnalytics. Aggregate-only; requires
-// scores:read; test/live isolated. Read-only — never moves a score.
+// scores:read; test/live isolated. Read-only, never moves a score.
 // GET /api/v1/analytics/scores.
 func (c *Client) GetScoreAnalytics(ctx context.Context, window *AnalyticsWindow) (*ScoreAnalyticsPayload, error) {
 	var out ScoreAnalyticsPayload
@@ -2130,7 +2130,7 @@ func (c *Client) GetScoreAnalytics(ctx context.Context, window *AnalyticsWindow)
 
 // ─── Activation campaigns (POST/GET /api/v1/activation/campaigns) ───────────
 
-// ActivationRow is one roster row for CreateActivationCampaign — exactly a
+// ActivationRow is one roster row for CreateActivationCampaign: exactly a
 // CreateConfirmationInput (embedded, so its fields serialize inline) plus an
 // optional RowKey: your own stable id for the roster line (e.g. a shift id),
 // which makes the campaign idempotent per row.
@@ -2147,7 +2147,7 @@ type CreateActivationCampaignInput struct {
 	Rows []ActivationRow `json:"rows"`
 }
 
-// ActivationCampaignSummary is the campaign record itself — a label over a set of
+// ActivationCampaignSummary is the campaign record itself, a label over a set of
 // confirmation requests.
 type ActivationCampaignSummary struct {
 	ID             string  `json:"id"`
@@ -2156,7 +2156,7 @@ type ActivationCampaignSummary struct {
 	CreatedAt      string  `json:"createdAt"`
 }
 
-// ActivationCampaignRowResult is one row's outcome — partial success. An ok row
+// ActivationCampaignRowResult is one row's outcome: partial success. An ok row
 // carries its one-time ConfirmationToken + hosted ConfirmURL; a failed one
 // carries Error + Code. No row writes anything to the ledger.
 type ActivationCampaignRowResult struct {
@@ -2173,7 +2173,7 @@ type ActivationCampaignRowResult struct {
 }
 
 // ActivationCampaignDuplicate is one row dropped as an in-batch repeat of an
-// earlier RowKey — no second token is ever minted for it.
+// earlier RowKey: no second token is ever minted for it.
 type ActivationCampaignDuplicate struct {
 	Index  int    `json:"index"`
 	RowKey string `json:"rowKey"`
@@ -2188,7 +2188,7 @@ type ActivationCampaignResult struct {
 	Results    []ActivationCampaignRowResult `json:"results"`
 }
 
-// ActivationFunnel is the factual counts a campaign reports — never a score or a
+// ActivationFunnel is the factual counts a campaign reports, never a score or a
 // judgment. ConfirmationRate is confirmed/submitted (0 when nothing submitted).
 type ActivationFunnel struct {
 	Submitted        int     `json:"submitted"`
@@ -2208,14 +2208,14 @@ type ActivationCampaignFunnelPayload struct {
 
 // CreateActivationCampaign is the ACTIVATION ENGINE at book scale. Submit your
 // whole historical roster/timesheets (up to 500 rows) in ONE call. Each row
-// becomes an UNCONFIRMED confirmation request — a proposed outcome plus a
-// one-time token — fanned out to its named counterparty, then
+// becomes an UNCONFIRMED confirmation request (a proposed outcome plus a
+// one-time token) fanned out to its named counterparty, then
 // GetActivationCampaign reports the funnel as those tokens are acted on.
 // POST /api/v1/activation/campaigns.
 //
 // INVARIANT: a campaign writes NOTHING to the ledger. Every row flows through the
 // SAME create path a single confirmation uses, so isVerified is still earned only
-// on a genuine counterparty confirm — never here.
+// on a genuine counterparty confirm, never here.
 //
 // Partial success: each Results entry carries a one-time token + hosted confirmUrl
 // (ok rows) or an Error + Code (failed rows); in-batch duplicate RowKeys are

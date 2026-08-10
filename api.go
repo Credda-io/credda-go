@@ -33,12 +33,12 @@ func (c *Client) GetTrustExport(ctx context.Context, token string) (*TrustExport
 // behind a share token, plus a signed W3C credential of that record
 // (CreddaDeliveryReceiptCredential, and CreddaAgentDeliveryCredential when the
 // subject is an agent). GET /api/v1/verify/:token/delivery-receipts. No key
-// required — the token is the capability, so an agent can present one string
+// required: the token is the capability, so an agent can present one string
 // mid-negotiation and the counterparty verifies the credential offline.
 //
 // ConfirmedDeliveries counts ONLY outcomes a DISTINCT counterparty attested: an
 // agent's own operator can never confirm its own work. This is a delivery
-// record — not a safety, alignment or capability rating, and never a
+// record, not a safety, alignment or capability rating, and never a
 // recommendation.
 func (c *Client) GetDeliveryReceipts(ctx context.Context, token string) (*DeliveryReceipts, error) {
 	var out DeliveryReceipts
@@ -48,13 +48,13 @@ func (c *Client) GetDeliveryReceipts(ctx context.Context, token string) (*Delive
 	return &out, nil
 }
 
-// RegisterAgent registers (or updates) an AGENT subject — a non-human scored
+// RegisterAgent registers (or updates) an AGENT subject, a non-human scored
 // subject. Writes no events and touches no score: an agent's record runs the
 // identical deterministic formula as a person's. POST /api/v1/agents.
 //
 // By default the calling platform is declared as the agent's OPERATOR, which
 // means events it reports for that agent are recorded but never counted as
-// verified evidence — only a distinct counterparty can confirm a delivery. Set
+// verified evidence: only a distinct counterparty can confirm a delivery. Set
 // OperatedByReportingPlatform to a pointer-to-false (and name the operator) when
 // reporting on someone else's agent. Requires events:write.
 func (c *Client) RegisterAgent(ctx context.Context, input RegisterAgentInput) (*AgentSubject, error) {
@@ -88,7 +88,7 @@ func (c *Client) GetWebhookEvents(ctx context.Context) (*WebhookEventCatalog, er
 	return &out, nil
 }
 
-// GetPlans fetches the developer plan catalog — the tiers, their scopes, rate
+// GetPlans fetches the developer plan catalog: the tiers, their scopes, rate
 // limits and feature matrix. The same data the API enforces and the pricing
 // page renders. GET /api/v1/plans. No API key required; no prices.
 func (c *Client) GetPlans(ctx context.Context) (*PlanCatalog, error) {
@@ -112,8 +112,8 @@ func (c *Client) GetErrorCatalog(ctx context.Context) (*ErrorCatalog, error) {
 	return &out, nil
 }
 
-// GetEnums fetches the self-describing wire enums — eventType, stakeLevel,
-// scoreBand, disputeStatus and platformTier — each value described, with the
+// GetEnums fetches the self-describing wire enums (eventType, stakeLevel,
+// scoreBand, disputeStatus and platformTier), each value described, with the
 // facts that matter (stake weights, band floors, platform trust multipliers).
 // Derived from the constants the API enforces, so a picker or validator built
 // from it cannot drift. GET /api/v1/enums. No API key required.
@@ -129,10 +129,10 @@ func (c *Client) GetEnums(ctx context.Context) (*EnumCatalog, error) {
 // versioned meaning of every reason code the scoring explanation can attribute,
 // each with a consumer-facing description, a factor and a direction (adverse /
 // supporting). Built for B2B2C partners that must issue an ECOA / Regulation B
-// statement of specific reasons — read a subject's ranked codes from
+// statement of specific reasons. Read a subject's ranked codes from
 // GET /score/explain (reasonCodes) and draw the notice from the adverse ones.
 // GET /api/v1/reason-codes. No API key required. Credda supplies the
-// attribution only — it is not a creditor and issues no notice.
+// attribution only: it is not a creditor and issues no notice.
 func (c *Client) GetReasonCodes(ctx context.Context) (*ReasonCodeCatalog, error) {
 	var out ReasonCodeCatalog
 	if err := c.get(ctx, "/reason-codes", false, &out); err != nil {
@@ -141,7 +141,7 @@ func (c *Client) GetReasonCodes(ctx context.Context) (*ReasonCodeCatalog, error)
 	return &out, nil
 }
 
-// GetDIDDocument fetches Credda's did:web DID document — issuer identity,
+// GetDIDDocument fetches Credda's did:web DID document: issuer identity,
 // verification keys, and service endpoints. GET /.well-known/did.json.
 func (c *Client) GetDIDDocument(ctx context.Context) (*DIDDocument, error) {
 	var out DIDDocument
@@ -175,7 +175,7 @@ func (c *Client) GetScore(ctx context.Context, userID string) (*ScorePayload, er
 }
 
 // GetScores is a batch score read: latest score + band for up to 100 users in
-// one call. Unknown ids come back as entries with Error == "not_found" — a
+// one call. Unknown ids come back as entries with Error == "not_found". A
 // partial batch still succeeds, and results are in request order.
 // POST /api/v1/users/scores.
 func (c *Client) GetScores(ctx context.Context, userIDs []string) (*BatchScoresPayload, error) {
@@ -237,7 +237,7 @@ func earningsQuery(query *EarningsQuery) url.Values {
 //
 // Only counterparty/platform-VERIFIED outcomes are attested; unverified value is
 // returned separately as UnverifiedReported and is never blended in. Amounts are
-// platform-reported units — the ledger records no currency.
+// platform-reported units: the ledger records no currency.
 //
 // This attests recorded outcomes. It is NOT an income verification for a credit
 // decision, NOT a consumer report, and makes no representation of completeness.
@@ -343,7 +343,7 @@ func (c *Client) GetRisk(ctx context.Context, userID string) (*RiskPayload, erro
 }
 
 // GetUsage returns this platform's own API consumption vs. its tier rate limit
-// and monthly quota. Pass nil days for the API default (7, server max 400 —
+// and monthly quota. Pass nil days for the API default (7, server max 400:
 // completed days beyond the live 90-day retention come from durable rollups).
 // GET /api/v1/usage.
 func (c *Client) GetUsage(ctx context.Context, days *int) (*UsagePayload, error) {
@@ -357,7 +357,7 @@ func (c *Client) GetUsage(ctx context.Context, days *int) (*UsagePayload, error)
 }
 
 // GetUsageRange returns this platform's own API consumption for an explicit
-// inclusive date range (ISO dates, YYYY-MM-DD) — for monthly statements.
+// inclusive date range (ISO dates, YYYY-MM-DD), for monthly statements.
 // Mutually exclusive with the trailing-days window server-side. Completed days
 // beyond the live 90-day counter retention are served from durable daily
 // rollups; ranges are clamped to the server's history window (default 400
@@ -374,7 +374,7 @@ func (c *Client) GetUsageRange(ctx context.Context, from, to string) (*UsagePayl
 	return &out, nil
 }
 
-// GetActivity returns this platform's own activity log — the self-serve audit
+// GetActivity returns this platform's own activity log, the self-serve audit
 // trail of what its keys and config did (events reported, webhooks/monitors
 // changed, share tokens minted, keys issued). Strictly scoped to the calling
 // platform's own rows, newest first, cursor-paginated. Uses the usage read
@@ -430,8 +430,8 @@ func (c *Client) ProjectScore(ctx context.Context, userID string, events []Proje
 // ── Writes (API key required) ───────────────────────────────────────────────
 
 // ReportEvent ingests an outcome event into the append-only ledger. Pass a
-// stable idempotencyKey (empty string to omit) to make retries exactly-once —
-// strongly recommended. POST /api/v1/events.
+// stable idempotencyKey (empty string to omit) to make retries exactly-once
+// (strongly recommended). POST /api/v1/events.
 func (c *Client) ReportEvent(ctx context.Context, input ReportEventInput, idempotencyKey string) (*ReportEventResult, error) {
 	var headers map[string]string
 	if idempotencyKey != "" {
@@ -456,7 +456,7 @@ func (c *Client) ReportEvents(ctx context.Context, events []BatchEventInput) (*B
 	return &out, nil
 }
 
-// MintShareToken mints (or rotates) a public share token for a user — the
+// MintShareToken mints (or rotates) a public share token for a user, the
 // capability behind trust badges, the verify page, and the portable export.
 // POST /api/v1/users/:id/share-token.
 func (c *Client) MintShareToken(ctx context.Context, userID string) (*ShareTokenResult, error) {
@@ -489,10 +489,10 @@ func (c *Client) ResolveDispute(ctx context.Context, disputeID, outcome string) 
 // ── Webhook management (API key required) ───────────────────────────────────
 //
 // To VERIFY received webhooks, use VerifyWebhookSignature /
-// ConstructWebhookEvent instead — those need no client and no network.
+// ConstructWebhookEvent instead: those need no client and no network.
 
 // CreateWebhook subscribes an HTTPS endpoint to trust events. The signing
-// secret is returned ONCE — store it to verify deliveries.
+// secret is returned ONCE. Store it to verify deliveries.
 // POST /api/v1/webhooks.
 func (c *Client) CreateWebhook(ctx context.Context, input CreateWebhookInput) (*CreateWebhookResult, error) {
 	var out CreateWebhookResult
@@ -552,14 +552,14 @@ func (c *Client) GetWebhookDeliveries(ctx context.Context, id string, limit *int
 }
 
 // GetRecentWebhookEvents returns recent outbound events across ALL of your
-// webhook endpoints — the "perform-list" sample-data source automation
+// webhook endpoints, the "perform-list" sample-data source automation
 // platforms (Zapier, Make, n8n) need to show a trigger's output BEFORE any
 // event has fired. Each item is the delivery envelope exactly as sent, so a
 // field mapping built against a sample keeps working on real deliveries.
 //
 // With no retained deliveries yet, representative payloads from the event
-// catalog are returned instead, flagged IsExample with Source == "examples" —
-// never present those as something that actually happened.
+// catalog are returned instead, flagged IsExample with Source == "examples".
+// Never present those as something that actually happened.
 //
 // Pass nil limit / empty cursor to omit them; eventTypes filters to specific
 // event types (an unknown type is a 400, not an empty result).
@@ -581,11 +581,11 @@ func (c *Client) GetRecentWebhookEvents(ctx context.Context, limit *int, cursor 
 // ── Score monitors (continuous monitoring, API key required) ────────────────
 //
 // Edge-triggered threshold/band watches that deliver monitor.triggered events
-// through your subscribed webhooks. Notification config only — a monitor never
+// through your subscribed webhooks. Notification config only: a monitor never
 // affects a score. Uses the `webhooks` scope.
 
 // CreateMonitor registers a monitor on one of your users. At least one
-// condition is required: BelowScore (downward crossing — also fires on a FIRST
+// condition is required: BelowScore (downward crossing, also fires on a FIRST
 // score already below the threshold), AboveScore (upward crossing only), or
 // OnBandChange. POST /api/v1/monitors.
 func (c *Client) CreateMonitor(ctx context.Context, input CreateMonitorInput) (*MonitorResult, error) {
@@ -629,7 +629,7 @@ func (c *Client) UpdateMonitor(ctx context.Context, id string, patch UpdateMonit
 	return &out, nil
 }
 
-// DeleteMonitor deletes a monitor (hard delete — it is config, not ledger
+// DeleteMonitor deletes a monitor (hard delete: it is config, not ledger
 // data). DELETE /api/v1/monitors/:id.
 func (c *Client) DeleteMonitor(ctx context.Context, id string) error {
 	return c.delete(ctx, "/monitors/"+esc(id))
@@ -638,13 +638,13 @@ func (c *Client) DeleteMonitor(ctx context.Context, id string) error {
 // ── Bulk screenings (async batch score reads, API key required) ─────────────
 //
 // Roster-scale batch reads: up to 10,000 ids per job (vs. GetScores' 100).
-// STRICTLY READ-ONLY — a screening never writes events, snapshots, or
+// STRICTLY READ-ONLY: a screening never writes events, snapshots, or
 // anything score-side. Uses the `scores` scope, same as GetScores.
 
 // CreateScreening submits an async bulk screening. Ids are deduped
 // server-side; each resolves through the same lookup as GetScores. Jobs of at
-// most 100 deduped ids are processed inline — the returned job is usually
-// already COMPLETED; larger jobs are queued: poll GetScreening until
+// most 100 deduped ids are processed inline (the returned job is usually
+// already COMPLETED); larger jobs are queued: poll GetScreening until
 // COMPLETED, then fetch GetScreeningResults. POST /api/v1/screenings.
 func (c *Client) CreateScreening(ctx context.Context, userIDs []string) (*ScreeningResult, error) {
 	var out ScreeningResult
@@ -682,7 +682,7 @@ func (c *Client) GetScreening(ctx context.Context, id string) (*ScreeningResult,
 // GetScreeningResults fetches the full per-user results of a COMPLETED
 // screening. Returns a 409 APIError (SCREENING_NOT_COMPLETED) while the job
 // is still queued/running or if it failed. CSV export (?format=csv) is a
-// raw-HTTP use case — this returns parsed JSON.
+// raw-HTTP use case. This returns parsed JSON.
 // GET /api/v1/screenings/:id/results.
 func (c *Client) GetScreeningResults(ctx context.Context, id string) (*ScreeningResultsResult, error) {
 	var out ScreeningResultsResult
@@ -695,8 +695,8 @@ func (c *Client) GetScreeningResults(ctx context.Context, id string) (*Screening
 // ── Data ingress: field-mapping ingest + historical CSV import ─────────────
 //
 // Send YOUR payload shape (no client-side transformation) or backfill a CSV.
-// Both write through the SAME append-only path as ReportEvent — idempotency,
-// velocity guard, audit trail, asynchronous score recomputation — and neither
+// Both write through the SAME append-only path as ReportEvent (idempotency,
+// velocity guard, audit trail, asynchronous score recomputation) and neither
 // contains any scoring logic. Uses the `events` scope, same as ReportEvent.
 //
 // A mapping is DECLARATIVE DATA, never code (see IngestMapping).
@@ -706,7 +706,7 @@ func (c *Client) GetScreeningResults(ctx context.Context, id string) (*Screening
 // otherwise the record still ingests, downgraded, with a warning.
 
 // Ingest reports records in your own shape via a field mapping. Up to 100
-// records per call; partial success — a bad record fails individually with its
+// records per call; partial success: a bad record fails individually with its
 // index and reason. Pass either mapping (inline) or mappingID (stored), not
 // both; leave the other zero. POST /api/v1/ingest.
 func (c *Client) Ingest(ctx context.Context, records []any, mapping IngestMapping, mappingID string) (*IngestResult, error) {
@@ -760,7 +760,7 @@ func (c *Client) GetMapping(ctx context.Context, id string) (*MappingResult, err
 	return &out, nil
 }
 
-// DeleteMapping deletes a stored mapping. Config, not ledger data — events
+// DeleteMapping deletes a stored mapping. Config, not ledger data: events
 // already ingested through it are untouched.
 // DELETE /api/v1/ingest/mappings/:id.
 func (c *Client) DeleteMapping(ctx context.Context, id string) error {
@@ -769,7 +769,7 @@ func (c *Client) DeleteMapping(ctx context.Context, id string) error {
 
 // CreateImport backfills historical outcomes from a CSV. Mapping paths are
 // COLUMN NAMES. Files of at most 100 rows are processed inline (the returned
-// job usually already reads COMPLETED); larger files are queued — poll
+// job usually already reads COMPLETED); larger files are queued: poll
 // GetImport, then GetImportErrors to fix and re-upload (idempotency keys make
 // that safe). Imported events keep their REAL dates, so scores recompute over
 // true history. POST /api/v1/imports.
@@ -811,7 +811,7 @@ func (c *Client) GetImport(ctx context.Context, id string) (*ImportResult, error
 
 // GetImportErrors returns every rejected row with its 1-based data-row number
 // and the exact reason, plus non-fatal warnings such as an isVerified
-// downgrade — so a corrected file can be re-uploaded safely.
+// downgrade, so a corrected file can be re-uploaded safely.
 // GET /api/v1/imports/:id/errors.
 func (c *Client) GetImportErrors(ctx context.Context, id string, limit, offset *int) (*ImportErrorsResult, error) {
 	qs := url.Values{}

@@ -4,8 +4,8 @@ package credda
 //
 // Credda signs each delivery with `X-Credda-Signature: sha256=<hex>` where the
 // HMAC-SHA256 is computed over `{X-Credda-Timestamp}.{rawBody}` using the
-// webhook's signing secret. Verify on the RAW request body — before unmarshalling
-// JSON — or the bytes won't match.
+// webhook's signing secret. Verify on the RAW request body (before unmarshalling
+// JSON) or the bytes won't match.
 
 import (
 	"crypto/hmac"
@@ -48,7 +48,7 @@ type VerifyWebhookInput struct {
 	// Tolerance rejects deliveries whose timestamp drifts more than this.
 	// nil means DefaultWebhookTolerance; an explicit 0 disables the check.
 	Tolerance *time.Duration
-	// Now overrides the current time — for tests. Zero value means time.Now().
+	// Now overrides the current time, for tests. Zero value means time.Now().
 	Now time.Time
 }
 
@@ -58,7 +58,7 @@ func Duration(d time.Duration) *time.Duration { return &d }
 // WebhookFactorDelta is one factor's movement between the prior and new score.
 type WebhookFactorDelta = FactorDelta
 
-// ScoreChangeReason explains why the score moved — a factor-level diff vs. the
+// ScoreChangeReason explains why the score moved: a factor-level diff vs. the
 // prior snapshot.
 type ScoreChangeReason struct {
 	ScoreDelta      float64              `json:"scoreDelta"`
@@ -206,7 +206,7 @@ func VerifyWebhookSignature(in VerifyWebhookInput) error {
 	return nil
 }
 
-// ConstructWebhookEvent verifies a delivery and returns the parsed event — the
+// ConstructWebhookEvent verifies a delivery and returns the parsed event, the
 // Stripe-style ergonomic path. It errors if verification fails or the body
 // isn't the expected shape.
 func ConstructWebhookEvent(in VerifyWebhookInput) (*WebhookEvent, error) {
@@ -225,7 +225,7 @@ func ConstructWebhookEvent(in VerifyWebhookInput) (*WebhookEvent, error) {
 }
 
 // SignWebhookPayload produces the header value Credda would send for a given
-// body and timestamp. Exported for tests and local fixtures — you never need
+// body and timestamp. Exported for tests and local fixtures. You never need
 // it to receive webhooks.
 func SignWebhookPayload(secret, rawBody string, timestamp int64) (signature, timestampHeader string) {
 	ts := strconv.FormatInt(timestamp, 10)

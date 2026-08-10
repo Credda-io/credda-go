@@ -1,11 +1,11 @@
-# `credda` — official Go SDK for the Credda API
+# `credda`: official Go SDK for the Credda API
 
 A dependency-free Go client for the [Credda](https://credda.io) Reliability Score
 API. It mirrors the TypeScript SDK (`@credda/js`) endpoint for endpoint: public
 share-token reads, platform-key scored reads, event ingestion, share tokens,
 dispute resolution, webhook management, and inbound webhook verification.
 
-Standard library only — `net/http`, `crypto/hmac`, `encoding/json`. No third-party
+Standard library only: `net/http`, `crypto/hmac`, `encoding/json`. No third-party
 modules.
 
 ## Install
@@ -37,7 +37,7 @@ fmt.Println(trust.FinalScore, trust.ScoreBand)
 ```
 
 `ResolveToken`, `GetTrustExport`, `GetDIDDocument` and `GetTrustRegistry` are the
-only methods that work without a key — they are safe for untrusted contexts.
+only methods that work without a key. They are safe for untrusted contexts.
 
 ### Platform: read a score (API key required)
 
@@ -58,7 +58,7 @@ fmt.Println(score.FinalScore, score.Breakdown.CR)
 ```
 
 > A `crd_live_…` key is server-side only. Never embed one in a client binary or
-> browser bundle — use a share token there.
+> browser bundle. Use a share token there.
 
 ### ⚠️ Unmeasured is not zero
 
@@ -190,7 +190,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 one of the `Err*` sentinels (`ErrSignatureMismatch`, `ErrTimestampSkew`,
 `ErrMissingSignature`, …) which you can branch on with `errors.Is`. The signature
 is HMAC-SHA256 over `{timestamp}.{rawBody}`, hex-encoded, compared in constant
-time — identical to the TypeScript SDK.
+time, identical to the TypeScript SDK.
 
 Replay tolerance defaults to 5 minutes. Override it with
 `Tolerance: credda.Duration(30 * time.Second)`, or disable the freshness check
@@ -241,12 +241,12 @@ The helpers `credda.Int`, `credda.Bool`, `credda.Float`, `credda.String` and
 
 | Method | Endpoint | Key |
 | --- | --- | --- |
-| `ResolveToken` | `GET /api/v1/verify/:token` | — |
-| `GetTrustExport` | `GET /api/v1/verify/:token/export` | — |
-| `GetPublicProfessionalRecord` | `GET /api/v1/verify/:token?scope=full&professional=1` | — |
-| `GetPublicReliabilityReport` | `GET /api/v1/verify/:token/reliability-report` | — |
-| `GetDIDDocument` | `GET /.well-known/did.json` | — |
-| `GetTrustRegistry` | `GET /.well-known/credda-trust-registry.json` | — |
+| `ResolveToken` | `GET /api/v1/verify/:token` | none |
+| `GetTrustExport` | `GET /api/v1/verify/:token/export` | none |
+| `GetPublicProfessionalRecord` | `GET /api/v1/verify/:token?scope=full&professional=1` | none |
+| `GetPublicReliabilityReport` | `GET /api/v1/verify/:token/reliability-report` | none |
+| `GetDIDDocument` | `GET /.well-known/did.json` | none |
+| `GetTrustRegistry` | `GET /.well-known/credda-trust-registry.json` | none |
 | `GetScore` | `GET /api/v1/users/:id/score` | ✓ |
 | `GetScores` | `POST /api/v1/users/scores` | ✓ |
 | `GetScoreExplain` | `GET /api/v1/users/:id/score/explain` | ✓ |
@@ -271,7 +271,7 @@ The helpers `credda.Int`, `credda.Bool`, `credda.Float`, `credda.String` and
 | `GetWebhookDeliveries` | `GET /api/v1/webhooks/:id/deliveries` | ✓ |
 | `GetRecentWebhookEvents` | `GET /api/v1/webhooks/deliveries` | ✓ |
 | `ReplayWebhookDelivery` | `POST /api/v1/webhooks/:id/deliveries/:deliveryId/replay` | ✓ |
-| `GetBenchmarks` | `GET /api/v1/benchmarks` | — |
+| `GetBenchmarks` | `GET /api/v1/benchmarks` | none |
 | `GetBenchmarkDistribution` | `GET /api/v1/benchmarks/distribution` | ✓ |
 | `GetUserBenchmark` | `GET /api/v1/users/:id/benchmark` | ✓ |
 | `ListUsers` | `GET /api/v1/users` | ✓ |
@@ -289,26 +289,26 @@ The helpers `credda.Int`, `credda.Bool`, `credda.Float`, `credda.String` and
 | `CreateActivationCampaign` | `POST /api/v1/activation/campaigns` | ✓ |
 | `GetActivationCampaign` | `GET /api/v1/activation/campaigns/:id` | ✓ |
 | `GetCareerExport` | `GET /api/v1/users/:id/career-export` | ✓ |
-| `GetPublicCareerExport` | `GET /api/v1/verify/:token/career-export` | — |
-| `GetOutcomeTemplates` | `GET /api/v1/outcome-templates` | — |
-| `GetChangelog` | `GET /api/v1/changelog` | — |
-| `GetOpenBadgeAchievements` | `GET /api/v1/open-badges/achievements` | — |
-| `GetOpenBadgeAchievement` | `GET /api/v1/open-badges/achievements/:badgeId` | — |
-| `GetCredentialIssuerMetadata` | `GET /.well-known/openid-credential-issuer` | — |
+| `GetPublicCareerExport` | `GET /api/v1/verify/:token/career-export` | none |
+| `GetOutcomeTemplates` | `GET /api/v1/outcome-templates` | none |
+| `GetChangelog` | `GET /api/v1/changelog` | none |
+| `GetOpenBadgeAchievements` | `GET /api/v1/open-badges/achievements` | none |
+| `GetOpenBadgeAchievement` | `GET /api/v1/open-badges/achievements/:badgeId` | none |
+| `GetCredentialIssuerMetadata` | `GET /.well-known/openid-credential-issuer` | none |
 | `CreateCredentialOffer` | `POST /api/v1/users/:id/credential-offer` | ✓ |
 | `CreateConfirmationRequest` | `POST /api/v1/confirmations` | ✓ |
 | `CreateConfirmationBatch` | `POST /api/v1/confirmations/batch` | ✓ |
 | `ListConfirmations` | `GET /api/v1/confirmations` | ✓ |
 | `GetConfirmation` | `GET /api/v1/confirmations/:id` | ✓ |
 | `CancelConfirmation` | `POST /api/v1/confirmations/:id/cancel` | ✓ |
-| `PreviewConfirmation` | `GET /api/v1/confirmations/:id/preview` | — |
-| `RespondToConfirmation` | `POST /api/v1/confirmations/:id/respond` | — |
+| `PreviewConfirmation` | `GET /api/v1/confirmations/:id/preview` | none |
+| `RespondToConfirmation` | `POST /api/v1/confirmations/:id/respond` | none |
 | `CreateReferenceRequest` | `POST /api/v1/references` | ✓ |
 | `ListReferences` | `GET /api/v1/references` | ✓ |
 | `GetReference` | `GET /api/v1/references/:id` | ✓ |
 | `CancelReference` | `POST /api/v1/references/:id/cancel` | ✓ |
-| `PreviewReference` | `GET /api/v1/references/:id/preview` | — |
-| `RespondToReference` | `POST /api/v1/references/:id/respond` | — |
+| `PreviewReference` | `GET /api/v1/references/:id/preview` | none |
+| `RespondToReference` | `POST /api/v1/references/:id/respond` | none |
 | `CreatePolicy` | `POST /api/v1/policies` | ✓ |
 | `ListPolicies` | `GET /api/v1/policies` | ✓ |
 | `GetPolicy` | `GET /api/v1/policies/:id` | ✓ |
@@ -319,7 +319,7 @@ Plus the catalog reads (`GetPlans`, `GetWebhookEvents`, `GetErrorCatalog`,
 `GetEnums`, `GetReasonCodes`), Verified Earnings (`GetEarnings`,
 `GetEarningsSummary`, `MintEarningsCredential`), agents (`RegisterAgent`,
 `GetAgent`, `GetDeliveryReceipts`), monitors, screenings, ingest/imports,
-`GetActivity`, `ExportEvents` and `GetUsageRange` — and the network-free helpers
+`GetActivity`, `ExportEvents` and `GetUsageRange`, and the network-free helpers
 `VerifyWebhookSignature`, `ConstructWebhookEvent` and `SignWebhookPayload`
 (test fixtures).
 
@@ -327,7 +327,7 @@ Plus the catalog reads (`GetPlans`, `GetWebhookEvents`, `GetErrorCatalog`,
 
 `ReportEvent` lets you *assert* `isVerified`. A confirmation request is the strong
 form: propose the outcome, hand the one-time token to the named counterparty over
-your own channel, and the event is written — verified — only when that distinct
+your own channel, and the event is written (verified) only when that distinct
 party confirms. Creating the request writes no event and touches no score.
 
 ```go
@@ -342,7 +342,7 @@ if err != nil {
     return err
 }
 
-// created.ConfirmationToken is shown ONCE — deliver it yourself.
+// created.ConfirmationToken is shown ONCE. Deliver it yourself.
 // The counterparty side needs no API key; the token is the capability:
 res, err := c.RespondToConfirmation(ctx, created.Confirmation.ID, created.ConfirmationToken, "confirm")
 ```
@@ -367,10 +367,10 @@ numbers. A percentile is a distribution fact, never a verdict.
 ## Deliberately not ported from `@credda/js`
 
 Every **network** method in the TypeScript SDK exists here under the same name in
-Go casing — that consistency is the point, and a parity test asserts each one's
+Go casing. That consistency is the point, and a parity test asserts each one's
 method, path, query, body and auth match what `@credda/js` sends.
 
-The one deliberate omission is **offline credential verification** —
+The one deliberate omission is **offline credential verification**:
 `verifyTrustCredential`, `verifyVerifiableCredential`, `isCredentialRevoked` and
 `verifyTrustExport` (EdDSA JWT signature checks against the issuer's JWKS/DID
 document, plus StatusList2021 revocation). This module is **stdlib-only** on
@@ -381,7 +381,7 @@ credential (`GetTrustExport`, `MintEarningsCredential`,
 verify it with the JOSE library of your choice against the JWKS in
 `GetDIDDocument()`, and check revocation against the `StatusList` URL on the
 payload. Webhook signature verification **is** included
-(`VerifyWebhookSignature` — HMAC-SHA256 from `crypto/hmac`, no dependency needed)
+(`VerifyWebhookSignature`: HMAC-SHA256 from `crypto/hmac`, no dependency needed)
 and is wire-compatible with the TypeScript and Python SDKs.
 
 The TypeScript React bindings (`CreddaProvider`, `useScore`, `useTrustToken`)
@@ -394,7 +394,7 @@ go vet ./...
 go test ./...
 ```
 
-Tests are hermetic — every HTTP interaction runs against `httptest.NewServer`.
+Tests are hermetic: every HTTP interaction runs against `httptest.NewServer`.
 
 ## License
 

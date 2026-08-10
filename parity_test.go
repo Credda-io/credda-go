@@ -118,7 +118,7 @@ func TestParityRequestShapes(t *testing.T) {
 			wantQuery:  "",
 		},
 		{
-			// `false` is a filter VALUE, not an absent one — it must reach the wire.
+			// `false` is a filter VALUE, not an absent one. It must reach the wire.
 			name:     "ListUsers sends the additional filters including the false cases",
 			response: `{"data":[],"count":0,"nextCursor":null}`,
 			call: func(c *Client) error {
@@ -255,7 +255,7 @@ func TestParityRequestShapes(t *testing.T) {
 			wantBody:   `{"userId":"u1","eventType":"CONTRACT_FULFILLED","counterpartyRef":"client@example.com"}`,
 		},
 		{
-			// api #296 — the hosted-page redirect travels on the create body.
+			// api #296: the hosted-page redirect travels on the create body.
 			name:     "CreateConfirmationRequest with a hosted-page returnUrl",
 			response: `{"confirmation":{"id":"cf_1"},"confirmUrl":"https://api.credda.io/confirm/cf_1?token=tok"}`,
 			call: func(c *Client) error {
@@ -558,7 +558,7 @@ func TestParityRequestShapes(t *testing.T) {
 			wantBody:   `{"category":"certification","label":"CCNA","issuer":"Cisco","verifiedBy":"registrar@cisco.example"}`,
 		},
 		{
-			// The witness rule decides verification — the SDK can never ask for it.
+			// The witness rule decides verification. The SDK can never ask for it.
 			name:     "RecordQualification without a witness sends no verified flag",
 			response: `{"userId":"u1","eventId":"ev_2","isVerified":false}`,
 			call: func(c *Client) error {
@@ -607,7 +607,7 @@ func TestParityRequestShapes(t *testing.T) {
 			wantBody:   `{"ttlSeconds":3600}`,
 		},
 		{
-			// The token is the capability — an API key must never be sent here,
+			// The token is the capability: an API key must never be sent here,
 			// and the record block is served ONLY at full disclosure.
 			name:     "GetPublicProfessionalRecord is keyless and asks for full scope",
 			response: `{"token":"tok","scope":"full","professionalRecord":{"professionalRecordVersion":"1.0"}}`,
@@ -644,7 +644,7 @@ func TestParityRequestShapes(t *testing.T) {
 			wantQuery:  "benchmark=1&recent=5",
 		},
 		{
-			// The token is the capability — an API key must never be sent here.
+			// The token is the capability: an API key must never be sent here.
 			name:     "GetPublicReliabilityReport is keyless",
 			response: `{"token":"tok","issuer":"credda.io","reliabilityReport":{"reliabilityReportVersion":"1.0"}}`,
 			call: func(c *Client) error {
@@ -668,7 +668,7 @@ func TestParityRequestShapes(t *testing.T) {
 			wantPath:   "/api/v1/users/ext-1/career-export",
 		},
 		{
-			// The token IS the consent — a public route must never carry a key.
+			// The token IS the consent: a public route must never carry a key.
 			name:     "GetPublicCareerExport is keyless",
 			response: `{"$schema":"https://jsonresume.org/schema","meta":{}}`,
 			call: func(c *Client) error {
@@ -884,7 +884,7 @@ func TestParityDecodesResponseBodies(t *testing.T) {
 
 // TestVerifiedProfileDecodesNullDepthAsNil pins the "null, not 0" invariant: a
 // category with nothing claimed has no depth, and reporting 0 would read as
-// "claimed but unverified" — a materially different (and wrong) statement.
+// "claimed but unverified", a materially different (and wrong) statement.
 func TestVerifiedProfileDecodesNullDepthAsNil(t *testing.T) {
 	c, _ := newTestServer(t, http.StatusOK, `{
 		"userId":"u1","profileVersion":"1.0",
@@ -941,7 +941,7 @@ func TestProfessionalRecordDecodes(t *testing.T) {
 	if out.Tenure.TrackRecordDays == nil || *out.Tenure.TrackRecordDays != 400 {
 		t.Fatalf("trackRecordDays = %v, want 400", out.Tenure.TrackRecordDays)
 	}
-	// A missing figure stays nil — never a default.
+	// A missing figure stays nil, never a default.
 	if out.Provenance.ComputedAt != nil {
 		t.Fatalf("computedAt = %v, want nil", *out.Provenance.ComputedAt)
 	}
@@ -1020,7 +1020,7 @@ func TestPublicReliabilityReportToleratesANullBlock(t *testing.T) {
 	}
 }
 
-// TestConfirmationBatchResultDecodes covers partial success — an ok item carries
+// TestConfirmationBatchResultDecodes covers partial success: an ok item carries
 // its token, a failed one its code, and neither writes to the ledger.
 func TestConfirmationBatchResultDecodes(t *testing.T) {
 	c, _ := newTestServer(t, http.StatusOK, `{
@@ -1126,7 +1126,7 @@ func TestParityKeyedCallsRejectedLocally(t *testing.T) {
 
 // TestDispatchReliabilityDecodesNullAsNil pins the "null, not 0" invariant on the
 // dispatch read: an unscored subject with an empty ledger has NO no-show rate,
-// and reporting 0.0 would read as a perfect record — a materially different (and
+// and reporting 0.0 would read as a perfect record, a materially different (and
 // wrong) statement to make about someone before a shift.
 func TestDispatchReliabilityDecodesNullAsNil(t *testing.T) {
 	c, _ := newTestServer(t, http.StatusOK, `{
@@ -1145,7 +1145,7 @@ func TestDispatchReliabilityDecodesNullAsNil(t *testing.T) {
 		t.Fatalf("score = %v, want nil for an unscored subject", *out.Score)
 	}
 	if out.NoShowRate != nil {
-		t.Fatalf("noShowRate = %v, want nil (absent) — never a placeholder 0", *out.NoShowRate)
+		t.Fatalf("noShowRate = %v, want nil (absent), never a placeholder 0", *out.NoShowRate)
 	}
 	if out.OnTimeRate != nil || out.DaysSinceLastEvent != nil {
 		t.Fatalf("absent metrics decoded as values: %+v", out)
@@ -1199,7 +1199,7 @@ func TestScoreAnalyticsDecodesNullCentralTendency(t *testing.T) {
 }
 
 // TestActivationCampaignDecodesPartialSuccess: a campaign is partial-success by
-// design — an ok row carries a one-time token, a failed one carries a code, and
+// design. An ok row carries a one-time token, a failed one carries a code, and
 // NEITHER writes anything to the ledger.
 func TestActivationCampaignDecodesPartialSuccess(t *testing.T) {
 	c, _ := newTestServer(t, http.StatusOK, `{
@@ -1272,7 +1272,7 @@ func TestUsageMetersDecodesTheBillingShape(t *testing.T) {
 }
 
 // TestEventAnalyticsDecodesNullVerifiedShare: a bucket with no events has no
-// verified share — nil, not 0 (0 would claim "events, none verified").
+// verified share: nil, not 0 (0 would claim "events, none verified").
 func TestEventAnalyticsDecodesNullVerifiedShare(t *testing.T) {
 	c, _ := newTestServer(t, http.StatusOK, `{
 		"window":{"days":30,"from":"2026-06-25","to":"2026-07-24"},
@@ -1324,7 +1324,7 @@ func TestEventAnalyticsDecodesConfirmed(t *testing.T) {
 	}
 }
 
-// TestCreateActivationCampaignSendsIdempotencyKey pins the retry header — a
+// TestCreateActivationCampaignSendsIdempotencyKey pins the retry header: a
 // retried whole submission must replay, never mint a second set of tokens.
 func TestCreateActivationCampaignSendsIdempotencyKey(t *testing.T) {
 	c, got := newTestServer(t, http.StatusOK, `{"campaign":{"id":"cmp_1"},"created":0,"failed":0,"duplicates":[],"results":[]}`)
