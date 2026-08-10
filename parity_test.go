@@ -934,7 +934,8 @@ func TestProfessionalRecordDecodes(t *testing.T) {
 	if out.UserID != "u1" || out.ProfessionalRecordVersion != "1.0" {
 		t.Fatalf("embedded record decoded wrong: %+v", out)
 	}
-	if out.Reliability.Band != "Good" || out.VerifiedExperience.VerifiedOutcomes != 9 {
+	if out.Reliability.Band == nil || *out.Reliability.Band != "Good" ||
+		out.VerifiedExperience.VerifiedOutcomes != 9 {
 		t.Fatalf("record fields decoded wrong: %+v", out.ProfessionalRecord)
 	}
 	if out.Tenure.TrackRecordDays == nil || *out.Tenure.TrackRecordDays != 400 {
@@ -985,7 +986,7 @@ func TestReliabilityReportDecodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetReliabilityReport: %v", err)
 	}
-	if out.UserID != "worker_7" || out.Reliability.Band != "Good" {
+	if out.UserID != "worker_7" || out.Reliability.Band == nil || *out.Reliability.Band != "Good" {
 		t.Fatalf("report decoded wrong: %+v", out)
 	}
 	// recency is nil (not 0) when there is no dated activity.

@@ -101,13 +101,88 @@ type EnumCatalog struct {
 	Enums []EnumDoc `json:"enums"`
 }
 
+// Reason-code directions. Informational is neither adverse nor supporting: it
+// states a fact about the DATA (no recorded outcomes, or a score not computed
+// yet) rather than about the record's performance.
+//
+// NEVER draw a Regulation B statement of specific reasons from an informational
+// code. It is the reason there is no attribution, not attribution.
+const (
+	ReasonDirectionAdverse       = "adverse"
+	ReasonDirectionSupporting    = "supporting"
+	ReasonDirectionInformational = "informational"
+)
+
+// Data states reported by ReasonCodeResult.DataState and
+// ReliabilityReportMetrics.DataState.
+const (
+	DataStateOK                  = "ok"
+	DataStateNoRecordedOutcomes  = "no_recorded_outcomes"
+	DataStateScoreNotYetComputed = "score_not_yet_computed"
+)
+
 // ReasonCodeDoc is one documented reason code from GET /api/v1/reason-codes.
 type ReasonCodeDoc struct {
-	Code        string `json:"code"`
-	Factor      string `json:"factor"`
-	Direction   string `json:"direction"` // "adverse" | "supporting"
+	Code   string `json:"code"`
+	Factor string `json:"factor"`
+	// Direction is one of the ReasonDirection* constants. The catalog serves
+	// "informational" today for NO_RECORDED_OUTCOMES and SCORE_NOT_YET_COMPUTED.
+	// filter those out of any adverse-action notice.
+	Direction   string `json:"direction"`
 	Title       string `json:"title"`
 	Description string `json:"description"`
+}
+
+// ReasonCodeInstance is one ranked reason-code instance for a specific subject,
+// returned inside GET /score/explain under reasonCodes.
+type ReasonCodeInstance struct {
+	Code   string `json:"code"`
+	Factor string `json:"factor"`
+	// Direction is one of the ReasonDirection* constants.
+	Direction   string `json:"direction"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	// Contribution is the importance-weighted contribution in [0,1], the ranking key.
+	Contribution float64 `json:"contribution"`
+	// Rank is 1-based within this instance's direction group.
+	Rank int `json:"rank"`
+	// Evidence holds the specific numbers behind the code, reproducible from the ledger.
+	Evidence map[string]float64 `json:"evidence"`
+}
+
+// ReasonCodeResult is the reasonCodes object attached to GET /score/explain:
+// deterministic factor attribution a partner draws its own Regulation B
+// statement of specific reasons from. Credda supplies the attribution only; it
+// takes no action and issues no notice.
+//
+// ⚠️ CHECK InsufficientData FIRST. When it is true, NOTHING is attributable:
+// the record holds no outcomes at all, or it holds outcomes whose score has not
+// been computed yet, and both ranked lists are EMPTY by construction. An absent
+// measurement must never yield an adverse reason.
+type ReasonCodeResult struct {
+	FormulaVersion     string `json:"formulaVersion"`
+	ReasonCodesVersion string `json:"reasonCodesVersion"`
+	// FinalScore is nil when the subject has no computed score.
+	FinalScore     *float64 `json:"finalScore"`
+	Method         string   `json:"method"`
+	KeyFactorLimit int      `json:"keyFactorLimit"`
+	// AdverseActionReasons is ranked most-significant-first. Empty whenever
+	// InsufficientData is true.
+	AdverseActionReasons []ReasonCodeInstance `json:"adverseActionReasons"`
+	// SupportingFactors is ranked. Empty whenever InsufficientData is true.
+	SupportingFactors []ReasonCodeInstance `json:"supportingFactors"`
+	// InformationalFactors are facts about the DATA rather than the record's
+	// performance (NO_RECORDED_OUTCOMES, SCORE_NOT_YET_COMPUTED). Never draw a
+	// statement of specific reasons from this list.
+	InformationalFactors []ReasonCodeInstance `json:"informationalFactors"`
+	// InsufficientData is true when nothing is attributable. Branch on it before
+	// reading either ranked list or FinalScore.
+	InsufficientData bool `json:"insufficientData"`
+	// DataState is one of the DataState* constants and says WHICH kind of
+	// unmeasured this is.
+	DataState   string   `json:"dataState"`
+	Disclosures []string `json:"disclosures"`
+	Advisory    string   `json:"advisory"`
 }
 
 // ReasonCodeCatalog is the adverse-action reason-code catalog
@@ -117,14 +192,17 @@ type ReasonCodeDoc struct {
 // (returned on GET /score/explain). Credda supplies the attribution only — it
 // is not a creditor and issues no decision or notice.
 type ReasonCodeCatalog struct {
-	ReasonCodesVersion string          `json:"reasonCodesVersion"`
-	FormulaVersion     string          `json:"formulaVersion"`
-	Note               string          `json:"note"`
-	Method             string          `json:"method"`
-	KeyFactorLimit     int             `json:"keyFactorLimit"`
-	KeyFactorGuidance  string          `json:"keyFactorGuidance"`
-	Disclosures        []string        `json:"disclosures"`
-	Codes              []ReasonCodeDoc `json:"codes"`
+	ReasonCodesVersion string `json:"reasonCodesVersion"`
+	FormulaVersion     string `json:"formulaVersion"`
+	Note               string `json:"note"`
+	Method             string `json:"method"`
+	KeyFactorLimit     int    `json:"keyFactorLimit"`
+	KeyFactorGuidance  string `json:"keyFactorGuidance"`
+	// InsufficientDataPolicy states the rule for an UNMEASURED record: it yields
+	// NO adverse reason, in either of the two ways a record can be unmeasured.
+	InsufficientDataPolicy string          `json:"insufficientDataPolicy"`
+	Disclosures            []string        `json:"disclosures"`
+	Codes                  []ReasonCodeDoc `json:"codes"`
 }
 
 // WebhookEventDoc is one documented outbound event from GET /api/v1/webhooks/events.
@@ -308,18 +386,58 @@ type BatchScoresPayload struct {
 }
 
 // ScoreExplainFactor is one factor in a plain-language score explanation.
+//
+// ⚠️ UNMEASURED IS NOT ZERO. Branch on Available before reading Value or
+// Contribution: the API sends JSON null for both whenever the record holds no
+// outcomes, and encoding/json silently leaves a non-pointer float64 at 0.0 in
+// that case. A 0.0 here would read as "completed none of them" about a record
+// that was never measured.
 type ScoreExplainFactor struct {
-	Name         string  `json:"name"`
-	Value        float64 `json:"value"`
-	Weight       string  `json:"weight"`
+	// Key is the stable machine key for this row: "completionRate",
+	// "onTimeRate", "disputeRate", "verificationDepth",
+	// "verifiedProfessionalGrounding". Match on this, never on Name: the human
+	// label has been renamed before and will be again.
+	Key  string `json:"key"`
+	Name string `json:"name"`
+	// Value is the factor value in [0,1]. VALID ONLY WHEN Available IS TRUE.
+	Value float64 `json:"value"`
+	// Weight is the fraction of the score this factor carries, in [0,1], e.g.
+	// 0.37. It is DERIVED from GET /api/v1/scoring/model, so it is the weight
+	// the engine actually applied.
+	//
+	// This was declared string until 2026-08-10, and that was not a narrow type,
+	// it was the wrong one: the API split the field on 2026-08-09 into a numeric
+	// weight and a separate WeightPercent label, and encoding/json refuses a
+	// number into a string with a hard UnmarshalTypeError rather than a zero
+	// value. GetScoreExplain therefore returned (nil, error) against the live
+	// API for every caller, so no Go consumer can have been decoding this
+	// successfully and no Go consumer can be broken by the correction.
+	Weight float64 `json:"weight"`
+	// WeightPercent is the same weight rendered for display, e.g. "37%". Use it
+	// instead of formatting Weight yourself, so a change to how the API rounds
+	// does not have to be mirrored here.
+	WeightPercent string `json:"weightPercent"`
+	// Contribution is weight × value. VALID ONLY WHEN Available IS TRUE.
 	Contribution float64 `json:"contribution"`
-	Description  string  `json:"description"`
+	// Available is false when the record has no data from which to measure this
+	// factor. This is the field to branch on.
+	Available   bool   `json:"available"`
+	Description string `json:"description"`
 }
 
 // ScoreExplainPayload comes from GET /api/v1/users/:id/score/explain.
 type ScoreExplainPayload struct {
-	Summary       string               `json:"summary"`
-	Factors       []ScoreExplainFactor `json:"factors"`
+	Summary string               `json:"summary"`
+	Factors []ScoreExplainFactor `json:"factors"`
+	// DataSufficiency is the explicit insufficient-data state for the whole
+	// explanation. Render it when InsufficientData is true instead of reading a
+	// rate off an unmeasured record. Present on every response, including the
+	// empty-record one (where Factors is empty).
+	DataSufficiency *DataSufficiency `json:"dataSufficiency,omitempty"`
+	// ReasonCodes is the deterministic adverse-action attribution (ECOA / Reg B)
+	// for this record. Check ReasonCodes.InsufficientData before drawing a
+	// statement of specific reasons from it.
+	ReasonCodes   *ReasonCodeResult `json:"reasonCodes,omitempty"`
 	PlatformTrust *struct {
 		Explanation string  `json:"explanation"`
 		AppliedTier string  `json:"appliedTier"`
@@ -396,23 +514,79 @@ type ScoreDeltaPayload struct {
 // ScoreComponent is one named, independently 0–100-scored component. Key is
 // one of: reliability, timeliness, trustworthiness, verification, consistency,
 // momentum.
+//
+// ⚠️ UNMEASURED IS NOT ZERO. Score is a POINTER, and nil means NOT MEASURED:
+//
+//	for _, c := range payload.Components {
+//	    if c.Score == nil {
+//	        fmt.Printf("%s: not measured\n", c.Label) // NOT "0"
+//	        continue
+//	    }
+//	    fmt.Printf("%s: %.0f\n", c.Label, *c.Score)
+//	}
+//
+// The API sends JSON null for Score whenever a component is not measurable
+// (today: the record has no recorded outcomes, so every rate has a zero
+// denominator). encoding/json decodes a null into a non-pointer float64 as a
+// NO-OP (no error, field untouched), which is why this field is *float64: a
+// plain float64 would read 0.0 in exactly that case, and in a product whose
+// bands run down to At Risk a 0.0 is the worst possible record, not an unknown
+// one. Available carries the same fact as a bool and is equally safe to branch
+// on. A MEASURED zero is a non-nil pointer to 0 with Available: true and must
+// still be displayed: hiding real bad news is a worse failure than the
+// substitution this rule exists to prevent.
 type ScoreComponent struct {
-	Key         string   `json:"key"`
-	Label       string   `json:"label"`
-	Score       float64  `json:"score"`
-	Weight      *float64 `json:"weight"`
-	Description string   `json:"description"`
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	// Score is 0–100, or nil when the component was not measured at all.
+	// Available carries the same fact as a bool.
+	Score *float64 `json:"score"`
+	// Weight is the share of the weighted raw score this component drives, or nil
+	// for the two multiplicative modifiers (consistency, momentum).
+	Weight *float64 `json:"weight"`
+	// Available is false when there is not enough data to measure this component
+	// at all. False does NOT mean the component scored badly; it means there was
+	// nothing to measure. This is the field to branch on.
+	Available   bool   `json:"available"`
+	Description string `json:"description"`
+}
+
+// DataSufficiency is the explicit insufficient-data state carried by
+// GET /score/components and GET /score/explain.
+//
+// Render THIS when InsufficientData is true, rather than inventing "0%
+// completion" for a record that has never been measured. No history is UNKNOWN,
+// never BAD.
+type DataSufficiency struct {
+	// InsufficientData is true when the record holds NO outcome events at all.
+	InsufficientData bool `json:"insufficientData"`
+	// State is "ok" or the specific reason nothing can be measured
+	// ("no_recorded_outcomes").
+	State            string `json:"state"`
+	RecordedOutcomes int    `json:"recordedOutcomes"`
+	VerifiedOutcomes int    `json:"verifiedOutcomes"`
+	// Note is plain-language copy that is safe to show verbatim.
+	Note string `json:"note"`
 }
 
 // ScoreComponentsPayload comes from GET /api/v1/users/:id/score/components.
+//
+// The top-level Available reports whether a score has been COMPUTED at all; the
+// per-component Available reports whether each component is MEASURABLE. They are
+// different questions: a computed snapshot over an empty outcome ledger returns
+// Available: true with every component Available: false.
 type ScoreComponentsPayload struct {
-	UserID         string           `json:"userId"`
-	Available      bool             `json:"available"`
-	FinalScore     *float64         `json:"finalScore,omitempty"`
-	ScoreBand      string           `json:"scoreBand,omitempty"`
-	Components     []ScoreComponent `json:"components"`
-	ComputedAt     string           `json:"computedAt,omitempty"`
-	FormulaVersion string           `json:"formulaVersion,omitempty"`
+	UserID     string           `json:"userId"`
+	Available  bool             `json:"available"`
+	FinalScore *float64         `json:"finalScore,omitempty"`
+	ScoreBand  string           `json:"scoreBand,omitempty"`
+	Components []ScoreComponent `json:"components"`
+	// DataSufficiency is present on every response, including the empty-record
+	// one (where Components is empty). Nil only when talking to an API older than
+	// the field.
+	DataSufficiency *DataSufficiency `json:"dataSufficiency,omitempty"`
+	ComputedAt      string           `json:"computedAt,omitempty"`
+	FormulaVersion  string           `json:"formulaVersion,omitempty"`
 }
 
 // ─── Verified Earnings ───────────────────────────────────────────────────────
@@ -602,6 +776,40 @@ type ScoreBandRef struct {
 	ScoreBand  string  `json:"scoreBand"`
 }
 
+// TimelinessDisclosure reports what a batch of hypothetical claims did, and did
+// not, state about lateness.
+//
+// An unstated lateness is NOT a claim of punctuality. The model gives an outcome
+// with no recorded deadline full timeliness credit, so a projection over
+// unstated claims is a BEST case: supplying the real lateness can only lower it.
+// Branch on ProjectionIsUpperBound before presenting a projected number as a
+// point estimate.
+type TimelinessDisclosure struct {
+	// StatedEvents counts the claims that stated a lateness. A stated 0 is a
+	// claim of punctuality the caller made; an unstated one is a fact nobody
+	// supplied. They are not interchangeable.
+	StatedEvents   int `json:"statedEvents"`
+	UnstatedEvents int `json:"unstatedEvents"`
+	// Basis is "stated", "partially_stated" or "unstated".
+	Basis string `json:"basis"`
+	// ProjectionIsUpperBound is true when at least one claim left its lateness
+	// unstated, which makes every projection in the response a best case.
+	ProjectionIsUpperBound bool `json:"projectionIsUpperBound"`
+	// Note states plainly what was and was not assumed. Safe to show verbatim.
+	Note string `json:"note"`
+	// ProjectedIfUnstatedWereLate is the other end of the range the request left
+	// open: the same projection with every unstated lateness at the model's floor
+	// point. Nil when nothing was left unstated. Present on ProjectScore only.
+	ProjectedIfUnstatedWereLate *ProjectedBound `json:"projectedIfUnstatedWereLate,omitempty"`
+}
+
+// ProjectedBound is a projected score/band/delta at one end of a bounded range.
+type ProjectedBound struct {
+	FinalScore float64 `json:"finalScore"`
+	ScoreBand  string  `json:"scoreBand"`
+	Delta      float64 `json:"delta"`
+}
+
 // ScoreProjectionPayload comes from POST /api/v1/users/:id/score/project.
 type ScoreProjectionPayload struct {
 	UserID         string       `json:"userId"`
@@ -610,6 +818,9 @@ type ScoreProjectionPayload struct {
 	Projected      ScoreBandRef `json:"projected"`
 	BandChanged    bool         `json:"bandChanged"`
 	FormulaVersion string       `json:"formulaVersion"`
+	// Timeliness says what the request stated about lateness, and whether the
+	// projection above is an upper bound rather than a point estimate.
+	Timeliness *TimelinessDisclosure `json:"timeliness,omitempty"`
 }
 
 // ─── Platforms / risk / usage ────────────────────────────────────────────────

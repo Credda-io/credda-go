@@ -60,6 +60,85 @@ fmt.Println(score.FinalScore, score.Breakdown.CR)
 > A `crd_live_…` key is server-side only. Never embed one in a client binary or
 > browser bundle — use a share token there.
 
+### ⚠️ Unmeasured is not zero
+
+The single most important rule when reading anything score-shaped out of this
+SDK. Credda distinguishes **"we measured it and it was bad"** from **"there was
+nothing to measure"**, and the API says which on the wire. Go makes this easy to
+get wrong, so read this before you render a number.
+
+`encoding/json` decodes a JSON `null` into a non-pointer `float64` as a **no-op**:
+the field keeps its zero value and **no error is returned**. A rate the API never
+measured would arrive in your struct as `0.0`, and in a product whose bands run
+down to *At Risk* a `0.0` is the worst possible record, not an unknown one.
+
+**Every nullable score, band and rate is therefore a pointer.** `nil` means the
+API sent `null`, which means *not measured*. A genuinely measured `0` is a
+non-nil pointer to `0`, and it must still be displayed. The compiler will not let
+you read one without deciding what the absence means:
+
+```go
+comps, err := client.GetScoreComponents(ctx, "user-42")
+if err != nil {
+    return err
+}
+
+// The whole-payload state first: is there anything to measure at all?
+if comps.DataSufficiency != nil && comps.DataSufficiency.InsufficientData {
+    fmt.Println(comps.DataSufficiency.Note) // safe to show verbatim
+}
+
+for _, c := range comps.Components {
+    if c.Score == nil {
+        fmt.Printf("%-16s not measured\n", c.Label) // NEVER "0"
+        continue
+    }
+    fmt.Printf("%-16s %.0f\n", c.Label, *c.Score) // 0 here is a REAL 0
+}
+```
+
+The nullable values, and the discriminator that says *why* each is absent:
+
+| Read | Nil-checked values | Discriminator explaining the absence |
+|---|---|---|
+| `GetScoreComponents` | `ScoreComponent.Score` | `ScoreComponent.Available`, `ScoreComponentsPayload.DataSufficiency` |
+| `GetScoreExplain` | (`Value`, `Contribution` are still `float64`, see below) | `ScoreExplainFactor.Available`, `ScoreExplainPayload.DataSufficiency` |
+| `GetScoreExplain().ReasonCodes` | `FinalScore` | `InsufficientData`, `DataState` |
+| `GetTrustSummary` | `Evidence.CompletionRate`, `Evidence.OnTimeRate` | `TrustSummaryEvidence.InsufficientData` |
+| `GetProfessionalRecord` | `Reliability.Score`, `Reliability.Band` | `VerifiedExperience`, `Tenure` |
+| `GetReliabilityReport` | `Reliability.Score`, `Reliability.Band`, `Metrics.CompletionRate`, `Metrics.OnTimeRate`, `Metrics.Consistency`, `Metrics.DisputeRate`, `Metrics.Recency` | `Metrics.InsufficientData`, `Metrics.DataState` |
+| `GetDispatchReliability` | `Score`, `Band`, `NoShowRate`, `OnTimeRate`, `DaysSinceLastEvent` | `Evidence.TotalOutcomes` |
+| `ProjectScore` / `AnalyzeDocument` | none | `Timeliness.ProjectionIsUpperBound` (`Projected` is a best case, not a point estimate) |
+
+Four things follow from this, and each has a test in `unmeasured_test.go`:
+
+- **A measured zero is still real and must still be shown.** A non-nil pointer to
+  `0` with `Available: true` is a record that genuinely completed nothing. Hiding
+  real bad news is a worse failure than the substitution this rule exists to
+  prevent. Never collapse `nil` and `0` back together on the way to your UI.
+- **A nil band is not an empty band.** `Reliability.Band` is `*string`, so an
+  unscored subject is `nil`, not `""`. Do not feed `""` into a band switch: the
+  default arm is usually the floor of the scale, which is the exact substitution
+  this rule forbids.
+- **An absent measurement is never an adverse reason.** When
+  `ReasonCodes.InsufficientData` is true, `AdverseActionReasons` and
+  `SupportingFactors` are **empty by construction**, and the one code present is
+  `informational`. Never draw a Regulation B statement of specific reasons from
+  it. `DataState` says whether the record has no outcomes at all
+  (`no_recorded_outcomes`) or outcomes whose score has not been computed yet
+  (`score_not_yet_computed`).
+- **An older API is safe.** The discriminators are additive; against a server that
+  predates them the flag is Go's zero value and the pointer blocks are `nil`.
+  Treat an absent flag as *unknown*, not as a positive "unavailable".
+
+Use `credda.Float(72)` and `credda.String("Established")` to build these pointers in
+your own fixtures and tests.
+
+`ScoreExplainFactor.Value` and `.Contribution` are the one remaining pair that
+stay `float64` even though the API can send `null` for them. Branch on
+`ScoreExplainFactor.Available` before reading either; they are held for the same
+version decision that governs `@credda/js`.
+
 ### Ingest an event (idempotently)
 
 ```go

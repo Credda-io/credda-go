@@ -117,15 +117,35 @@ type BookSummaryPayload struct {
 // ─── Types: trust summary ────────────────────────────────────────────────────
 
 // TrustSummaryEvidence is the recorded evidence a trust summary rests on.
+//
+// ⚠️ UNMEASURED IS NOT ZERO. CompletionRate and OnTimeRate are POINTERS: the API
+// sends JSON null for both when the record holds no outcomes, and nil is how
+// that absence survives decoding. A nil rate means NOT MEASURED; it does not
+// mean zero, and rendering it as 0 says "completed none of them" about a record
+// that was never measured.
+//
+//	if e.CompletionRate == nil {
+//	    fmt.Println("completion: not measured") // NOT "0%"
+//	} else {
+//	    fmt.Printf("completion %.0f%%\n", *e.CompletionRate*100)
+//	}
+//
+// A MEASURED zero is a non-nil pointer to 0, reports InsufficientData: false,
+// and must still be shown: real bad news is not the same as no news.
 type TrustSummaryEvidence struct {
-	FinalScore        float64 `json:"finalScore"`
-	ScoreBand         string  `json:"scoreBand"`
-	ConfidenceLevel   string  `json:"confidenceLevel"`
-	CompletionRate    float64 `json:"completionRate"`
-	OnTimeRate        float64 `json:"onTimeRate"`
-	VerifiedEvents    int     `json:"verifiedEvents"`
-	TotalEvents       int     `json:"totalEvents"`
-	DistinctPlatforms int     `json:"distinctPlatforms"`
+	FinalScore      float64 `json:"finalScore"`
+	ScoreBand       string  `json:"scoreBand"`
+	ConfidenceLevel string  `json:"confidenceLevel"`
+	// CompletionRate is nil when it was not measured. InsufficientData says why.
+	CompletionRate *float64 `json:"completionRate"`
+	// OnTimeRate is nil when it was not measured. InsufficientData says why.
+	OnTimeRate        *float64 `json:"onTimeRate"`
+	VerifiedEvents    int      `json:"verifiedEvents"`
+	TotalEvents       int      `json:"totalEvents"`
+	DistinctPlatforms int      `json:"distinctPlatforms"`
+	// InsufficientData is true when there are no recorded outcomes, so nothing
+	// above is measurable. This is the field to branch on.
+	InsufficientData bool `json:"insufficientData"`
 }
 
 // TrustSummaryAI is the optional advisory AI narrative (inert unless enabled).
@@ -561,19 +581,55 @@ type ReferenceRespondResult struct {
 // "policy" key). UserID is your own external id for a subject-scoped policy, or
 // nil for an appliesToAll policy.
 type ThresholdPolicy struct {
-	ID              string   `json:"id"`
-	Name            string   `json:"name"`
-	AppliesToAll    bool     `json:"appliesToAll"`
-	Metric          string   `json:"metric"`
-	Direction       *string  `json:"direction"`
-	Threshold       *float64 `json:"threshold"`
-	Component       *string  `json:"component"`
-	Band            *string  `json:"band"`
-	IsActive        bool     `json:"isActive"`
-	LastTriggeredAt *string  `json:"lastTriggeredAt"`
-	CreatedAt       string   `json:"createdAt"`
-	UpdatedAt       string   `json:"updatedAt"`
-	UserID          *string  `json:"userId"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	AppliesToAll bool     `json:"appliesToAll"`
+	Metric       string   `json:"metric"`
+	Direction    *string  `json:"direction"`
+	Threshold    *float64 `json:"threshold"`
+	Component    *string  `json:"component"`
+	// Band is the watched label when Metric is "band". Any string is accepted by
+	// the API and it is NOT checked against the current ladder, so read
+	// ConditionStatus beside it rather than assuming the label still exists.
+	Band     *string `json:"band"`
+	IsActive bool    `json:"isActive"`
+	// ConditionStatus is read-only and derived by the API on every read: can this
+	// condition still be met on today's band ladder? PolicyConditionUnreachable
+	// means it never can, for any subject at any score, so no
+	// policy.threshold_crossed will ever be delivered for it.
+	//
+	// A POINTER on purpose. A policy read from an OLDER API deployment carries no
+	// such field, and decoding an absent JSON key into a plain string would yield
+	// "" while decoding it into a non-pointer would make "not reported"
+	// indistinguishable from a real value. Nil means not reported, never fine.
+	ConditionStatus       *string                     `json:"conditionStatus"`
+	ConditionStatusReason *PolicyConditionUnreachable `json:"conditionStatusReason"`
+	LastTriggeredAt       *string                     `json:"lastTriggeredAt"`
+	CreatedAt             string                      `json:"createdAt"`
+	UpdatedAt             string                      `json:"updatedAt"`
+	UserID                *string                     `json:"userId"`
+}
+
+// Values for ThresholdPolicy.ConditionStatus.
+const (
+	// PolicyConditionActive means the vocabulary the condition is written in is
+	// current. It is NOT a promise that the policy will fire.
+	PolicyConditionActive = "active"
+	// PolicyConditionUnreachableStatus means the condition can never be met.
+	PolicyConditionUnreachableStatus = "unreachable"
+)
+
+// PolicyConditionUnreachable explains why a policy condition can never be met,
+// naming the ladder as it stands. Band is the label exactly as you stored it,
+// never corrected and never mapped to a guess at which current band an old name
+// meant.
+type PolicyConditionUnreachable struct {
+	// Code is "BAND_NOT_IN_LADDER": the watched band is not a label the current
+	// ladder defines.
+	Code         string   `json:"code"`
+	Band         string   `json:"band"`
+	CurrentBands []string `json:"currentBands"`
+	Message      string   `json:"message"`
 }
 
 // CreatePolicyInput is the body for CreatePolicy. Set exactly one of UserID
@@ -1187,6 +1243,60 @@ type RecordQualificationInput struct {
 	// nothing is deleted, the marker is one more event, and a claim a witness
 	// already confirmed is permanent record.
 	Retract bool `json:"retract,omitempty"`
+	// Supersedes records this event as SUPERSEDING the earlier instances of
+	// (Category, ClaimRef): resolution then reads the group from this event
+	// onward, so a credential that has LAPSED or been downgraded stops
+	// resolving verified. It REQUIRES ClaimRef (400 without it).
+	//
+	// This is how you RETIRE a confirmed claim, and it is deliberately not a
+	// delete and not a retraction. The ledger stays append-only: the earlier
+	// verified event is untouched and the record still reports when the claim
+	// was last confirmed. Retract means WITHDRAW THE CLAIM and cannot beat a
+	// verified event; "this lapsed" is a different statement with its own
+	// marker.
+	//
+	// It grants nothing on its own: the IsVerified of the superseding event
+	// still comes from the witness rule, so superseding WITH a witness
+	// re-verifies and superseding without one lands self-attested. Re-syncing
+	// the same ClaimRef alone does NOT replace an earlier verified instance,
+	// because the ledger appends and verified wins.
+	Supersedes bool `json:"supersedes,omitempty"`
+	// ProvenanceTier declares WHAT KIND OF SOURCE asserted this claim, so
+	// verification gates on how costly the source is to fake rather than on
+	// whether an asserting string is present. Optional and additive: empty
+	// records the claim exactly as before. "SELF_REPORTED",
+	// "SUBJECT_CONTROLLED_PROOF" and "PUBLIC_REGISTRY" can never reach
+	// IsVerified; "HIGH_COST_REGISTRY" may verify the exact fact a register
+	// holds and nothing broader; "AUTHORITATIVE_SYSTEM_OF_RECORD" may verify
+	// unless the subject administers the source; "HUMAN_CONFIRMATION" is
+	// unchanged. The gate is a one-way valve — a stronger tier can never raise a
+	// claim above what the witness rule already supports.
+	ProvenanceTier string `json:"provenanceTier,omitempty"`
+	// ProvenanceCitationURI is a citable public http(s) link to the asserting
+	// source. REQUIRED for the register tiers. Stored as text, never fetched.
+	ProvenanceCitationURI string `json:"provenanceCitationUri,omitempty"`
+	// SubjectAdministersSource says whether the SUBJECT administers the
+	// asserting source. Three-valued on the wire: false asserts independence,
+	// true demotes, and OMITTING it also demotes, because absence of evidence is
+	// not evidence of independence. Use a pointer so "false" is distinguishable
+	// from "not sent".
+	SubjectAdministersSource *bool `json:"subjectAdministersSource,omitempty"`
+}
+
+// RecordedProvenance is what was recorded about the ASSERTING SOURCE of a claim.
+type RecordedProvenance struct {
+	// Tier is the tier actually applied, AFTER the subject-administration demotion.
+	Tier string `json:"tier"`
+	// DeclaredTier is what arrived. Equal to Tier when nothing was demoted.
+	DeclaredTier             string  `json:"declaredTier"`
+	CitationURI              *string `json:"citationUri"`
+	SubjectAdministersSource *bool   `json:"subjectAdministersSource"`
+	// Label is a display label this claim must travel with, or nil.
+	Label *string `json:"label"`
+	// DoesNotProve states what a source of this kind does NOT prove.
+	DoesNotProve string `json:"doesNotProve"`
+	// Enforced reports whether the gate was live when this row was written.
+	Enforced bool `json:"enforced"`
 }
 
 // RecordQualificationResult is POST /api/v1/users/:id/qualifications. The claim
@@ -1201,10 +1311,17 @@ type RecordQualificationResult struct {
 	ClaimRef *string `json:"claimRef"`
 	// Retracted is true when this call recorded a retraction marker, not a claim.
 	Retracted bool `json:"retracted"`
+	// Superseded is true when this call recorded a SUPERSESSION marker, opening
+	// a new resolution window on the claim group. False from an older API,
+	// which never sent the field.
+	Superseded bool `json:"superseded"`
 	// VerificationNote says why the claim was recorded as self-attested. Nil
 	// when verified.
 	VerificationNote *string `json:"verificationNote"`
-	Note             string  `json:"note"`
+	// Provenance is what was recorded about the asserting source. Nil when no
+	// tier was declared, which is the pre-tier shape exactly.
+	Provenance *RecordedProvenance `json:"provenance"`
+	Note       string              `json:"note"`
 }
 
 // ─── Types: professional record ──────────────────────────────────────────────
@@ -1219,9 +1336,24 @@ type RecordQualificationResult struct {
 // consumer report. The disclosures travel on every payload for that reason.
 
 // ProfessionalRecordReliability is the reliability figure the record rests on.
+//
+// ⚠️ UNMEASURED IS NOT ZERO. Score and Band are POINTERS because the API sends
+// JSON null for both when the subject has never been scored. nil means NO
+// RECORD; it does not mean a score of 0 or an empty band, and in a product whose
+// bands run down to At Risk those are opposite statements:
+//
+//	if r.Score == nil || r.Band == nil {
+//	    fmt.Println("not yet scored") // NOT 0, NOT "At Risk"
+//	} else {
+//	    fmt.Printf("%.0f (%s)\n", *r.Score, *r.Band)
+//	}
+//
+// A genuinely measured 0 is a non-nil pointer to 0 and must still be shown.
 type ProfessionalRecordReliability struct {
-	Score float64 `json:"score"`
-	Band  string  `json:"band"`
+	// Score is nil when the subject has no computed score.
+	Score *float64 `json:"score"`
+	// Band is nil when the subject has no computed score.
+	Band *string `json:"band"`
 	// Confidence is verified-evidence confidence, 0..1.
 	Confidence float64 `json:"confidence"`
 }
@@ -1305,9 +1437,13 @@ type ReliabilityReportOutcome struct {
 // ReliabilityReportFactor is a ranked driver of the score (a relabelled reason
 // code).
 type ReliabilityReportFactor struct {
-	Code         string  `json:"code"`
-	Factor       string  `json:"factor"`
-	Direction    string  `json:"direction"` // "adverse" | "supporting"
+	Code   string `json:"code"`
+	Factor string `json:"factor"`
+	// Direction is one of the ReasonDirection* constants. TopFactors is derived
+	// from the ranked adverse/supporting codes and is EMPTY for an unmeasured
+	// record. Check Metrics.InsufficientData rather than reading an empty list
+	// as "no problems found".
+	Direction    string  `json:"direction"`
 	Title        string  `json:"title"`
 	Description  string  `json:"description"`
 	Contribution float64 `json:"contribution"`
@@ -1316,9 +1452,23 @@ type ReliabilityReportFactor struct {
 
 // ReliabilityReportReliability is the score the report rests on, with the versions
 // that produced it.
+//
+// ⚠️ UNMEASURED IS NOT ZERO. Score and Band are POINTERS because the API sends
+// JSON null for both when the subject has never been scored. nil means NO
+// RECORD, not a score of 0 and not an empty band:
+//
+//	if r.Score == nil || r.Band == nil {
+//	    fmt.Println("not yet scored") // NOT 0, NOT "At Risk"
+//	} else {
+//	    fmt.Printf("%.0f (%s)\n", *r.Score, *r.Band)
+//	}
+//
+// A genuinely measured 0 is a non-nil pointer to 0 and must still be shown.
 type ReliabilityReportReliability struct {
-	Score              float64 `json:"score"`
-	Band               string  `json:"band"`
+	// Score is nil when the subject has no computed score.
+	Score *float64 `json:"score"`
+	// Band is nil when the subject has no computed score.
+	Band               *string `json:"band"`
 	Confidence         float64 `json:"confidence"`
 	FormulaVersion     string  `json:"formulaVersion"`
 	ReasonCodesVersion string  `json:"reasonCodesVersion"`
@@ -1326,12 +1476,39 @@ type ReliabilityReportReliability struct {
 
 // ReliabilityReportMetrics are the underlying rates. Recency is nil when the
 // record has no dated activity — never 0.
+//
+// ⚠️ UNMEASURED IS NOT ZERO. Every rate here is a POINTER, and nil means NOT
+// MEASURED:
+//
+//	if m.CompletionRate == nil {
+//	    fmt.Println("not measured:", m.DataState) // NOT "0% completion"
+//	} else {
+//	    fmt.Printf("completion %.0f%%\n", *m.CompletionRate*100)
+//	}
+//
+// The API sends JSON null for CompletionRate, OnTimeRate, Consistency and
+// DisputeRate whenever they were not measured: the record holds no outcomes, or
+// it holds outcomes whose score has not been computed yet. A zero denominator is
+// not a 0% rate and a pending computation is not a 0% rate, so a buyer must
+// never read "completed none of them" off an empty or still-computing record.
+// InsufficientData and DataState say WHY nothing was measured; the nil itself
+// says THAT nothing was. A genuinely measured 0 is a non-nil pointer to 0,
+// reports InsufficientData: false, and must still be shown.
 type ReliabilityReportMetrics struct {
-	CompletionRate float64  `json:"completionRate"`
-	OnTimeRate     float64  `json:"onTimeRate"`
-	Consistency    float64  `json:"consistency"`
-	Recency        *float64 `json:"recency"`
-	DisputeRate    float64  `json:"disputeRate"`
+	// CompletionRate is nil when it was not measured. DataState says why.
+	CompletionRate *float64 `json:"completionRate"`
+	// OnTimeRate is nil when it was not measured. DataState says why.
+	OnTimeRate *float64 `json:"onTimeRate"`
+	// Consistency is nil when it was not measured. DataState says why.
+	Consistency *float64 `json:"consistency"`
+	Recency     *float64 `json:"recency"`
+	// DisputeRate is nil when it was not measured. DataState says why.
+	DisputeRate *float64 `json:"disputeRate"`
+	// InsufficientData is true when no rate above is measurable. DataState says why.
+	InsufficientData bool `json:"insufficientData"`
+	// DataState is one of the DataState* constants; it mirrors
+	// ReasonCodeResult.DataState so a reader cannot see the two disagree.
+	DataState string `json:"dataState"`
 }
 
 // ReliabilityReportExperience is the professional-record verified-experience block
@@ -1700,10 +1877,15 @@ type DocumentClaimAdvice struct {
 
 // DocumentAdvicePayload is the response from AnalyzeDocument. It writes nothing.
 type DocumentAdvicePayload struct {
-	UserID         string                `json:"userId"`
-	Claims         []DocumentClaimAdvice `json:"claims"`
-	Projection     map[string]any        `json:"projection"`
-	WitnessGuide   map[string]any        `json:"witnessGuide"`
+	UserID       string                `json:"userId"`
+	Claims       []DocumentClaimAdvice `json:"claims"`
+	Projection   map[string]any        `json:"projection"`
+	WitnessGuide map[string]any        `json:"witnessGuide"`
+	// Timeliness reports what the submitted claims stated about lateness. Both
+	// projections credit an unstated lateness with full timeliness, so they are
+	// upper bounds whenever Timeliness.ProjectionIsUpperBound is true. Branch on
+	// it rather than letting the number imply a punctuality nobody claimed.
+	Timeliness     *TimelinessDisclosure `json:"timeliness,omitempty"`
 	Summary        string                `json:"summary"`
 	FormulaVersion string                `json:"formulaVersion"`
 	Note           string                `json:"note"`
