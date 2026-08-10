@@ -2,13 +2,13 @@
 //
 // Two access models, matching the API (and the TypeScript SDK, @credda/js):
 //
-//   - Public   — ResolveToken / GetTrustExport / GetDIDDocument / GetTrustRegistry
+//   - Public: ResolveToken / GetTrustExport / GetDIDDocument / GetTrustRegistry
 //     hit public endpoints and need no API key.
-//   - Platform — everything else sends a platform API key as a Bearer token.
+//   - Platform: everything else sends a platform API key as a Bearer token.
 //     These are for SERVER-SIDE use only; never ship a `crd_live_…` key to an
 //     untrusted client.
 //
-// The zero value of Client is not usable — construct one with NewClient.
+// The zero value of Client is not usable. Construct one with NewClient.
 package credda
 
 import (
@@ -89,13 +89,13 @@ func NewClient(opts ...Option) *Client {
 //
 // It also carries everything needed to debug the failure later:
 //
-//   - RequestID — the X-Request-Id correlation id. Log it. Quoting it lets
+//   - RequestID: the X-Request-Id correlation id. Log it. Quoting it lets
 //     Credda find the exact request in our logs; without it, support starts
 //     from "describe what happened".
-//   - Code — the stable machine code (see GET /api/v1/errors).
-//   - Details — structured context, e.g. one entry per failed field on a
+//   - Code: the stable machine code (see GET /api/v1/errors).
+//   - Details: structured context, e.g. one entry per failed field on a
 //     VALIDATION_ERROR.
-//   - RetryAfter — how long the server asked you to wait (every 429 says so);
+//   - RetryAfter: how long the server asked you to wait (every 429 says so);
 //     zero when it did not.
 type APIError struct {
 	StatusCode int
@@ -167,7 +167,7 @@ type requestOptions struct {
 
 func (c *Client) do(ctx context.Context, ro requestOptions, out any) error {
 	if ro.needsAPIKey && c.apiKey == "" {
-		return fmt.Errorf("credda: %s %s requires an API key — construct the client with WithAPIKey", ro.method, ro.path)
+		return fmt.Errorf("credda: %s %s requires an API key (construct the client with WithAPIKey)", ro.method, ro.path)
 	}
 
 	prefix := apiPrefix
@@ -226,7 +226,7 @@ func (c *Client) do(ctx context.Context, ro requestOptions, out any) error {
 		if msg == "" {
 			msg = fmt.Sprintf("request failed (%d)", resp.StatusCode)
 		}
-		// The header is authoritative — it survives a non-JSON body; the body
+		// The header is authoritative: it survives a non-JSON body; the body
 		// echoes the same id.
 		requestID := resp.Header.Get("X-Request-Id")
 		if requestID == "" {
@@ -251,7 +251,7 @@ func (c *Client) do(ctx context.Context, ro requestOptions, out any) error {
 		return fmt.Errorf("credda: reading response body: %w", readErr)
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
-		// 204 / empty body for a caller that expected JSON — leave zero value.
+		// 204 / empty body for a caller that expected JSON. Leave zero value.
 		return nil
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
@@ -274,7 +274,7 @@ func (c *Client) post(ctx context.Context, path string, body any, headers map[st
 	}, out)
 }
 
-// postPublic POSTs without attaching an API key — for token-gated public
+// postPublic POSTs without attaching an API key, for token-gated public
 // endpoints (e.g. a counterparty responding to a confirmation request).
 func (c *Client) postPublic(ctx context.Context, path string, body any, out any) error {
 	return c.do(ctx, requestOptions{method: http.MethodPost, path: path, body: body, needsAPIKey: false}, out)

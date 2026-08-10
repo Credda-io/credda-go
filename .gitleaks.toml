@@ -16,7 +16,7 @@ useDefault = true
 # against anything, and every HTTP interaction runs against httptest.NewServer.
 #
 # Scoped to the idempotency fixtures in that one file, so a real key committed
-# anywhere in the repository — including elsewhere in client_test.go — still
+# anywhere in the repository (including elsewhere in client_test.go) still
 # fails the build.
 [allowlist]
 regexTarget = "line"

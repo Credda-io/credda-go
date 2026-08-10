@@ -137,7 +137,7 @@ func TestVerifyWebhookSignature(t *testing.T) {
 }
 
 func TestVerifyWebhookSignatureMatchesKnownVector(t *testing.T) {
-	// Fixed vector: HMAC-SHA256("secret", "1700000000.{}") — asserts the signed
+	// Fixed vector: HMAC-SHA256("secret", "1700000000.{}"), asserting the signed
 	// message is exactly `{timestamp}.{rawBody}`, matching the TS SDK.
 	sig, ts := SignWebhookPayload("secret", "{}", 1_700_000_000)
 	if ts != "1700000000" {

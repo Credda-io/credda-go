@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// serverWithHeaders replies with the given status, body and response headers —
+// serverWithHeaders replies with the given status, body and response headers:
 // the error path is mostly about headers, which newTestServer doesn't set.
 func serverWithHeaders(t *testing.T, status int, body string, headers map[string]string) *Client {
 	t.Helper()
@@ -82,7 +82,7 @@ func TestAPIErrorSurvivesANonJSONBody(t *testing.T) {
 	if e.StatusCode != http.StatusBadGateway {
 		t.Errorf("StatusCode = %d, want 502", e.StatusCode)
 	}
-	// The header survives a body we cannot parse — which is exactly when a
+	// The header survives a body we cannot parse, which is exactly when a
 	// correlation id is most useful.
 	if e.RequestID != "rq-4" {
 		t.Errorf("RequestID = %q, want rq-4", e.RequestID)
@@ -139,7 +139,7 @@ func TestAPIErrorExposesRetryAfterAndRetryable(t *testing.T) {
 		t.Errorf("RetryAfter = %v, want 45s", e.RetryAfter)
 	}
 	if !e.Retryable {
-		t.Error("Retryable = false, want true — the API said this one is safe to repeat")
+		t.Error("Retryable = false, want true (the API said this one is safe to repeat)")
 	}
 }
 
@@ -179,7 +179,7 @@ func TestGetErrorCatalog(t *testing.T) {
 	if got.Method != http.MethodGet || got.Path != "/api/v1/errors" {
 		t.Errorf("request = %s %s, want GET /api/v1/errors", got.Method, got.Path)
 	}
-	// Public endpoint — no key should be sent.
+	// Public endpoint: no key should be sent.
 	if got.Auth != "" {
 		t.Errorf("Authorization = %q, want empty (public endpoint)", got.Auth)
 	}
@@ -209,7 +209,7 @@ func TestGetEnums(t *testing.T) {
 	if v.Value != "HIGH" {
 		t.Errorf("value = %q, want HIGH", v.Value)
 	}
-	// The per-enum extras must survive decoding — they are the useful part.
+	// The per-enum extras must survive decoding: they are the useful part.
 	if w, ok := v.Extra["weight"].(float64); !ok || w != 1.5 {
 		t.Errorf("Extra[weight] = %v, want 1.5", v.Extra["weight"])
 	}
