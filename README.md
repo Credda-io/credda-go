@@ -1,3 +1,12 @@
+<p align="center">
+  <a href="https://credda.io">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Credda-io/credda-go/main/assets/creddalockuplongdarktransparent.png">
+      <img alt="Credda" src="https://raw.githubusercontent.com/Credda-io/credda-go/main/assets/creddalockuplonglighttransparent.png" width="360">
+    </picture>
+  </a>
+</p>
+
 # `credda`: official Go SDK for the Credda API
 
 A dependency-free Go client for the [Credda](https://credda.io) Reliability Score
