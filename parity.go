@@ -1540,13 +1540,42 @@ type ReliabilityReport struct {
 	Reliability              ReliabilityReportReliability `json:"reliability"`
 	Metrics                  ReliabilityReportMetrics     `json:"metrics"`
 	VerifiedExperience       ReliabilityReportExperience  `json:"verifiedExperience"`
-	TopFactors               []ReliabilityReportFactor    `json:"topFactors"`
-	RecentOutcomes           []ReliabilityReportOutcome   `json:"recentOutcomes"`
-	Benchmark                *ReliabilityReportBenchmark  `json:"benchmark"`
-	Status                   ProfessionalRecordStatus     `json:"status"`
-	Provenance               ProfessionalRecordProvenance `json:"provenance"`
-	Disclosures              []string                     `json:"disclosures"`
-	Advisory                 string                       `json:"advisory"`
+	// References is nil against an API older than report version 1.1; absent must
+	// stay distinguishable from a subject with no references.
+	References     *ReliabilityReportReferences `json:"references,omitempty"`
+	TopFactors     []ReliabilityReportFactor    `json:"topFactors"`
+	RecentOutcomes []ReliabilityReportOutcome   `json:"recentOutcomes"`
+	Benchmark      *ReliabilityReportBenchmark  `json:"benchmark"`
+	Status         ProfessionalRecordStatus     `json:"status"`
+	Provenance     ProfessionalRecordProvenance `json:"provenance"`
+	Disclosures    []string                     `json:"disclosures"`
+	Advisory       string                       `json:"advisory"`
+}
+
+// ReliabilityReportReferences is what third parties have CONFIRMED about the
+// record the subject presents.
+//
+// Counts only, deliberately: no referee name, address or text. A referee is a
+// real person who agreed to confirm a fact, not to be listed to whoever holds
+// the share. A re-projection of the Verified Profile, so the two can never
+// disagree, and qualifications never reach the reliability score.
+type ReliabilityReportReferences struct {
+	Verified     int `json:"verified"`
+	Claimed      int `json:"claimed"`
+	SelfAttested int `json:"selfAttested"`
+	// VerificationDepth is nil when nothing is claimed. A pointer, not a bare
+	// float64: Go decodes a JSON null into a value type as a silent 0.0, and a 0
+	// here would read as "none of it checks out".
+	VerificationDepth  *float64                             `json:"verificationDepth"`
+	RecordVerification map[string]any                       `json:"recordVerification"`
+	ByCategory         map[string]ReliabilityReportCategory `json:"byCategory"`
+}
+
+// ReliabilityReportCategory is one category's claimed vs verified counts.
+type ReliabilityReportCategory struct {
+	Claimed           int      `json:"claimed"`
+	Verified          int      `json:"verified"`
+	VerificationDepth *float64 `json:"verificationDepth"`
 }
 
 // ReliabilityReportPayload is GET /api/v1/users/:id/reliability-report.
