@@ -249,7 +249,8 @@ The helpers `credda.Int`, `credda.Bool`, `credda.Float`, `credda.String` and
 ### Retries
 
 Off by default. `WithRetries(n)` enables `n` re-attempts of TRANSIENT failures
-(network errors, 429, 502, 503, 504), with the same rules as `@credda/js`:
+(network errors, 429, 502, 503, 504, and anything the API's error catalog marks
+`retryable`):
 
 ```go
 client := credda.NewClient(
@@ -263,7 +264,9 @@ client := credda.NewClient(
   enabling this can never double-report an event. Nothing else retries, and the
   single-use `RespondToConfirmation` / `RespondToReference` endpoints never do:
   a repeat there can only turn a slow success into a confusing 409.
-- A non-transient status (400, 401, 404, 409, …) returns immediately.
+- A non-transient status (400, 401, 404, 409, …) returns immediately. The
+  `retryable` field of the error envelope is honored, so a 500 the API marks
+  retryable is re-attempted where `@credda/js` gives up.
 - Backoff doubles from the base, except when the server sent `Retry-After`,
   which wins because it knows when the window resets. Both are capped by the
   second argument: a monthly-quota 429 can ask for days, and an uncapped wait
@@ -425,7 +428,8 @@ Retry semantics are ported in full: same transient status set, same
 GET-and-keyed-POST-only rule, same `Retry-After`-wins-then-capped backoff, same
 off-by-default. The names differ only in casing and units, `retries` /
 `retryBaseMs` / `maxRetryDelayMs` becoming `WithRetries` and `WithRetryBackoff`
-taking `time.Duration`.
+taking `time.Duration`. Go additionally honours the envelope's `retryable`
+field, which the TypeScript client ignores.
 
 ## Tests
 

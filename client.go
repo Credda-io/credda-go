@@ -72,8 +72,8 @@ func WithHTTPClient(hc *http.Client) Option {
 }
 
 // WithRetries enables opt-in automatic retries of TRANSIENT failures (network
-// errors, 429, 502, 503, 504), matching @credda/js. n is the number of
-// RE-attempts; 0 (the default) is off.
+// errors, 429, 502, 503, 504, and anything the API's own error catalog marks
+// retryable). n is the number of RE-attempts; 0 (the default) is off.
 //
 // Applied to GETs always, and to POSTs ONLY when the call carries an
 // Idempotency-Key, so enabling this can never double-report an event. Backoff is
@@ -214,13 +214,46 @@ func (ro requestOptions) safeToRepeat() bool {
 	return false
 }
 
-// retryableStatus is the transient set shared with @credda/js: rate limit plus
-// upstream and gateway blips.
-func retryableStatus(code int) bool {
-	return code == 429 || code == 502 || code == 503 || code == 504
+// retryable decides whether err is worth repeating. A non-APIError is a
+// transport failure, which is. An APIError is when the API's own catalog says
+// so, or when the status is transient: those also cover the edge cases the JSON
+// envelope never reaches, a gateway or rate limiter in front of the API.
+func retryable(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return true
+	}
+	switch apiErr.StatusCode {
+	case 429, 502, 503, 504:
+		return true
+	}
+	return apiErr.Retryable
+}
+
+// retryDelay is the wait before attempt i (1-based). The server's own
+// Retry-After wins when it sent one: it knows when the window resets, and
+// waiting less just earns another 429. The cap applies either way, since a
+// monthly-quota Retry-After can run to days.
+func (c *Client) retryDelay(i int, lastErr error) time.Duration {
+	delay := c.maxRetryDelay
+	if i-1 < 62 {
+		delay = c.retryBase << (i - 1)
+	}
+	var apiErr *APIError
+	if errors.As(lastErr, &apiErr) && apiErr.RetryAfter > 0 {
+		delay = apiErr.RetryAfter
+	}
+	if delay > c.maxRetryDelay || delay < 0 {
+		delay = c.maxRetryDelay
+	}
+	return delay
 }
 
 func (c *Client) do(ctx context.Context, ro requestOptions, out any) error {
+	if ro.needsAPIKey && c.apiKey == "" {
+		return fmt.Errorf("credda: %s %s requires an API key (construct the client with WithAPIKey)", ro.method, ro.path)
+	}
+
 	var encoded []byte
 	if ro.body != nil {
 		b, err := json.Marshal(ro.body)
@@ -238,17 +271,7 @@ func (c *Client) do(ctx context.Context, ro requestOptions, out any) error {
 	var lastErr error
 	for i := 0; i < tries; i++ {
 		if i > 0 {
-			// The server's own Retry-After wins when it sent one: it knows when
-			// the window resets, and waiting less just earns another 429.
-			delay := c.retryBase << (i - 1)
-			var apiErr *APIError
-			if errors.As(lastErr, &apiErr) && apiErr.RetryAfter > 0 {
-				delay = apiErr.RetryAfter
-			}
-			if delay > c.maxRetryDelay {
-				delay = c.maxRetryDelay
-			}
-			timer := time.NewTimer(delay)
+			timer := time.NewTimer(c.retryDelay(i, lastErr))
 			select {
 			case <-ctx.Done():
 				timer.Stop()
@@ -261,8 +284,7 @@ func (c *Client) do(ctx context.Context, ro requestOptions, out any) error {
 			return nil
 		}
 		lastErr = err
-		var apiErr *APIError
-		if errors.As(err, &apiErr) && !retryableStatus(apiErr.StatusCode) {
+		if !retryable(err) {
 			return err
 		}
 	}
@@ -270,10 +292,6 @@ func (c *Client) do(ctx context.Context, ro requestOptions, out any) error {
 }
 
 func (c *Client) attempt(ctx context.Context, ro requestOptions, encoded []byte, out any) error {
-	if ro.needsAPIKey && c.apiKey == "" {
-		return fmt.Errorf("credda: %s %s requires an API key (construct the client with WithAPIKey)", ro.method, ro.path)
-	}
-
 	prefix := apiPrefix
 	if ro.absolute {
 		prefix = ""

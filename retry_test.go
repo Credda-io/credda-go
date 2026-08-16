@@ -147,6 +147,51 @@ func TestRetryPolicy(t *testing.T) {
 	}
 }
 
+func TestServerVerdictDecidesUncoveredStatuses(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		body      string
+		wantCalls int32
+	}{
+		{"catalog says retryable", `{"code":"INTERNAL_ERROR","retryable":true}`, 3},
+		{"catalog says it is not", `{"code":"PLAN_REQUIRED","retryable":false}`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt32(&calls, 1)
+				w.WriteHeader(500)
+				w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			c := NewClient(WithBaseURL(srv.URL), WithRetries(2),
+				WithRetryBackoff(time.Millisecond, 20*time.Millisecond))
+			if _, err := c.GetBenchmarks(context.Background()); err == nil {
+				t.Fatal("expected an error")
+			}
+			if got := atomic.LoadInt32(&calls); got != tc.wantCalls {
+				t.Fatalf("requests = %d, want %d", got, tc.wantCalls)
+			}
+		})
+	}
+}
+
+func TestMissingAPIKeyIsNotRetried(t *testing.T) {
+	srv, calls := statusServer(t, "", 200)
+	c := NewClient(WithBaseURL(srv.URL), WithRetries(3),
+		WithRetryBackoff(time.Second, time.Second))
+	start := time.Now()
+	if err := c.DeletePolicy(context.Background(), "pol_1"); err == nil {
+		t.Fatal("expected an error")
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("took %v, a client-side precondition must fail without backoff", elapsed)
+	}
+	if got := atomic.LoadInt32(calls); got != 0 {
+		t.Fatalf("requests = %d, want 0", got)
+	}
+}
+
 func TestRetryAfterIsHonoredAndCapped(t *testing.T) {
 	t.Run("honored over exponential backoff", func(t *testing.T) {
 		srv, calls := statusServer(t, "1", 429, 200)
