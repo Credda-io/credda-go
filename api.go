@@ -90,7 +90,8 @@ func (c *Client) GetWebhookEvents(ctx context.Context) (*WebhookEventCatalog, er
 
 // GetPlans fetches the developer plan catalog: the tiers, their scopes, rate
 // limits and feature matrix. The same data the API enforces and the pricing
-// page renders. GET /api/v1/plans. No API key required; no prices.
+// page renders, including the official monthly prices. GET /api/v1/plans. No
+// API key required.
 func (c *Client) GetPlans(ctx context.Context) (*PlanCatalog, error) {
 	var out PlanCatalog
 	if err := c.get(ctx, "/plans", false, &out); err != nil {
