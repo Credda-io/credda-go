@@ -35,9 +35,12 @@ const apiPrefix = "/api/v1"
 // Client is a Credda API client. It is safe for concurrent use by multiple
 // goroutines.
 type Client struct {
-	baseURL    string
-	apiKey     string
-	httpClient *http.Client
+	baseURL       string
+	apiKey        string
+	httpClient    *http.Client
+	retries       int
+	retryBase     time.Duration
+	maxRetryDelay time.Duration
 }
 
 // Option configures a Client. Pass options to NewClient.
@@ -68,12 +71,44 @@ func WithHTTPClient(hc *http.Client) Option {
 	}
 }
 
+// WithRetries enables opt-in automatic retries of TRANSIENT failures (network
+// errors, 429, 502, 503, 504), matching @credda/js. n is the number of
+// RE-attempts; 0 (the default) is off.
+//
+// Applied to GETs always, and to POSTs ONLY when the call carries an
+// Idempotency-Key, so enabling this can never double-report an event. Backoff is
+// 300ms doubling per attempt, or the server's own Retry-After when it sent one,
+// capped at 5s either way. Tune with WithRetryBackoff.
+func WithRetries(n int) Option {
+	return func(c *Client) {
+		if n > 0 {
+			c.retries = n
+		}
+	}
+}
+
+// WithRetryBackoff overrides the first backoff wait and the ceiling on any
+// single wait (defaults 300ms and 5s). The cap matters: a monthly-quota 429 can
+// carry a Retry-After of days, and without it a retry would hang the call.
+func WithRetryBackoff(base, max time.Duration) Option {
+	return func(c *Client) {
+		if base > 0 {
+			c.retryBase = base
+		}
+		if max > 0 {
+			c.maxRetryDelay = max
+		}
+	}
+}
+
 // NewClient builds a Client. With no options it targets DefaultBaseURL with a
-// 30s-timeout HTTP client and no API key (public endpoints only).
+// 30s-timeout HTTP client, no API key (public endpoints only) and no retries.
 func NewClient(opts ...Option) *Client {
 	c := &Client{
-		baseURL:    DefaultBaseURL,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		baseURL:       DefaultBaseURL,
+		httpClient:    &http.Client{Timeout: 30 * time.Second},
+		retryBase:     300 * time.Millisecond,
+		maxRetryDelay: 5 * time.Second,
 	}
 	for _, o := range opts {
 		if o != nil {
@@ -165,7 +200,76 @@ type requestOptions struct {
 	headers     map[string]string
 }
 
+// safeToRepeat reports whether repeating this request can only ever be
+// exactly-once: GETs always, POSTs only when idempotency-keyed. Every other
+// write is left alone, so an opt-in retry cannot double-report.
+func (ro requestOptions) safeToRepeat() bool {
+	switch ro.method {
+	case http.MethodGet:
+		return true
+	case http.MethodPost:
+		_, keyed := ro.headers["Idempotency-Key"]
+		return keyed
+	}
+	return false
+}
+
+// retryableStatus is the transient set shared with @credda/js: rate limit plus
+// upstream and gateway blips.
+func retryableStatus(code int) bool {
+	return code == 429 || code == 502 || code == 503 || code == 504
+}
+
 func (c *Client) do(ctx context.Context, ro requestOptions, out any) error {
+	var encoded []byte
+	if ro.body != nil {
+		b, err := json.Marshal(ro.body)
+		if err != nil {
+			return fmt.Errorf("credda: encoding request body: %w", err)
+		}
+		encoded = b
+	}
+
+	tries := 1
+	if c.retries > 0 && ro.safeToRepeat() {
+		tries = c.retries + 1
+	}
+
+	var lastErr error
+	for i := 0; i < tries; i++ {
+		if i > 0 {
+			// The server's own Retry-After wins when it sent one: it knows when
+			// the window resets, and waiting less just earns another 429.
+			delay := c.retryBase << (i - 1)
+			var apiErr *APIError
+			if errors.As(lastErr, &apiErr) && apiErr.RetryAfter > 0 {
+				delay = apiErr.RetryAfter
+			}
+			if delay > c.maxRetryDelay {
+				delay = c.maxRetryDelay
+			}
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+		err := c.attempt(ctx, ro, encoded, out)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && !retryableStatus(apiErr.StatusCode) {
+			return err
+		}
+	}
+	return lastErr
+}
+
+func (c *Client) attempt(ctx context.Context, ro requestOptions, encoded []byte, out any) error {
 	if ro.needsAPIKey && c.apiKey == "" {
 		return fmt.Errorf("credda: %s %s requires an API key (construct the client with WithAPIKey)", ro.method, ro.path)
 	}
@@ -177,11 +281,7 @@ func (c *Client) do(ctx context.Context, ro requestOptions, out any) error {
 	full := c.baseURL + prefix + ro.path
 
 	var reader io.Reader
-	if ro.body != nil {
-		encoded, err := json.Marshal(ro.body)
-		if err != nil {
-			return fmt.Errorf("credda: encoding request body: %w", err)
-		}
+	if encoded != nil {
 		reader = bytes.NewReader(encoded)
 	}
 
@@ -189,7 +289,7 @@ func (c *Client) do(ctx context.Context, ro requestOptions, out any) error {
 	if err != nil {
 		return fmt.Errorf("credda: building request: %w", err)
 	}
-	if ro.body != nil {
+	if encoded != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if c.apiKey != "" && ro.needsAPIKey {
