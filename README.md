@@ -1,8 +1,8 @@
 <p align="center">
   <a href="https://credda.io">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Credda-io/credda-go/main/assets/creddalockuplongdarktransparent.png">
-      <img alt="Credda" src="https://raw.githubusercontent.com/Credda-io/credda-go/main/assets/creddalockuplonglighttransparent.png" width="360">
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Credda-io/credda-go/main/assets/creddaseallockupdarktransparent.png">
+      <img alt="Credda" src="https://raw.githubusercontent.com/Credda-io/credda-go/main/assets/creddaseallockuplighttransparent.png" width="480">
     </picture>
   </a>
 </p>
