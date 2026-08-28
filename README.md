@@ -16,7 +16,8 @@ request. It proposes. It never merges.
 
 This package is a typed Go client over that engine's HTTP API: read the queue,
 read what a run established, watch a run happen live, and enqueue an
-investigation from a bug report.
+investigation from a bug report. That API is documented at
+[api.credda.io/reference](https://api.credda.io/reference).
 
 **Standard library only:** `net/http`, `encoding/json`, `bufio`. No third-party
 modules. `go.mod` has no `require` block, and
@@ -48,6 +49,17 @@ import credda "github.com/Credda-io/credda-go"
 
 That is the whole install. No vendoring, no `replace` directive, no transitive
 graph to audit.
+
+> **That command gets v0.3.0 today — checked 2026-08-28.** The highest tag this
+> module has is **v0.3.0**, which is the retired reliability-score client. The
+> engine client this README documents is **v0.4.0, and it is not tagged yet**;
+> `proxy.golang.org` lists only `v0.1.0`, `v0.1.1`, `v0.2.0`, `v0.3.0`. Until
+> v0.4.0 is cut, `go get` resolves to the wrong product, and the `retract`
+> directives described under [Versioning](#versioning) — which are already in
+> `go.mod` — have no effect, because the proxy only honours a `retract` from a
+> published version.
+> To use the code in this repository now, `go get` it at a commit
+> (`go get github.com/Credda-io/credda-go@main`).
 
 ## Quick start
 
