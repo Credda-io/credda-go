@@ -2,1597 +2,950 @@ package credda
 
 import "encoding/json"
 
-// ─── Public / discovery ──────────────────────────────────────────────────────
-
-// Plan is one developer tier from GET /api/v1/plans.
-type Plan struct {
-	ID              string   `json:"id"` // STARTER | GROWTH | ENTERPRISE
-	Name            string   `json:"name"`
-	Tagline         string   `json:"tagline"`
-	Scopes          []string `json:"scopes"`
-	RateLimitPerMin int      `json:"rateLimitPerMin"`
-	// MonitorLimit is the cap on active continuous score monitors for this tier.
-	MonitorLimit int `json:"monitorLimit"`
-	// PriceUsdMonthly is the official monthly price in USD (display-only until
-	// self-serve checkout is live).
-	PriceUsdMonthly int      `json:"priceUsdMonthly"`
-	Support         string   `json:"support"`
-	Features        []string `json:"features"`
-}
-
-// PlanFeature is a feature row (label + group) for a comparison table.
-type PlanFeature struct {
-	Key   string `json:"key"`
-	Group string `json:"group"`
-	Label string `json:"label"`
-}
-
-// PlanCatalog is the developer plan catalog from GET /api/v1/plans: the tiers,
-// their scopes, rate limits, official monthly prices and feature matrix.
-type PlanCatalog struct {
-	Pricing  string        `json:"pricing"` // "official"
-	Note     string        `json:"note"`
-	Features []PlanFeature `json:"features"`
-	Plans    []Plan        `json:"plans"`
-}
-
-// ErrorCodeDoc is one documented error code from GET /api/v1/errors.
-type ErrorCodeDoc struct {
-	Code        string `json:"code"`
-	HTTPStatus  int    `json:"httpStatus"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	WhatToDo    string `json:"whatToDo"`
-	// Retryable is true only when repeating the identical request can succeed
-	// later without any change by the caller.
-	Retryable bool `json:"retryable"`
-}
-
-// ErrorCatalog is the machine-readable error catalog from GET /api/v1/errors.
-type ErrorCatalog struct {
-	Envelope      map[string]string `json:"envelope"`
-	RetryGuidance string            `json:"retryGuidance"`
-	Tracing       string            `json:"tracing"`
-	Codes         []ErrorCodeDoc    `json:"codes"`
-}
-
-// EnumValueDoc is one value of a documented enum. Value and Description are
-// always present; Extra holds the enum-specific facts (weight for stakeLevel,
-// minScore for scoreBand, trustMultiplier for platformTier, ingestible for
-// eventType, terminal for disputeStatus).
-type EnumValueDoc struct {
-	Value       string         `json:"value"`
-	Description string         `json:"description"`
-	Extra       map[string]any `json:"-"`
-}
-
-// UnmarshalJSON keeps the known fields typed while preserving the per-enum
-// extras, which differ by enum and would otherwise be silently dropped.
-func (v *EnumValueDoc) UnmarshalJSON(data []byte) error {
-	var all map[string]any
-	if err := json.Unmarshal(data, &all); err != nil {
-		return err
-	}
-	if s, ok := all["value"].(string); ok {
-		v.Value = s
-	}
-	if s, ok := all["description"].(string); ok {
-		v.Description = s
-	}
-	delete(all, "value")
-	delete(all, "description")
-	v.Extra = all
-	return nil
-}
-
-// EnumDoc is one documented enum from GET /api/v1/enums.
-type EnumDoc struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	// UsedIn lists where this enum appears on the wire.
-	UsedIn []string       `json:"usedIn"`
-	Values []EnumValueDoc `json:"values"`
-}
-
-// EnumCatalog is every closed value set the API accepts or returns
-// (GET /api/v1/enums).
-type EnumCatalog struct {
-	Note  string    `json:"note"`
-	Enums []EnumDoc `json:"enums"`
-}
-
-// Reason-code directions. Informational is neither adverse nor supporting: it
-// states a fact about the DATA (no recorded outcomes, or a score not computed
-// yet) rather than about the record's performance.
+// This file mirrors apps/api/src/serialize.ts field for field. Every mapper
+// there is written out explicitly so that a new database column cannot leak to
+// a client silently; every struct here is written out explicitly for the mirror
+// reason, so that a field appearing on the wire that nobody typed is visible as
+// a field this client does not read.
 //
-// NEVER draw a Regulation B statement of specific reasons from an informational
-// code. It is the reason there is no attribution, not attribution.
-const (
-	ReasonDirectionAdverse       = "adverse"
-	ReasonDirectionSupporting    = "supporting"
-	ReasonDirectionInformational = "informational"
-)
-
-// Data states reported by ReasonCodeResult.DataState and
-// ReliabilityReportMetrics.DataState.
-const (
-	DataStateOK                  = "ok"
-	DataStateNoRecordedOutcomes  = "no_recorded_outcomes"
-	DataStateScoreNotYetComputed = "score_not_yet_computed"
-)
-
-// ReasonCodeDoc is one documented reason code from GET /api/v1/reason-codes.
-type ReasonCodeDoc struct {
-	Code   string `json:"code"`
-	Factor string `json:"factor"`
-	// Direction is one of the ReasonDirection* constants. The catalog serves
-	// "informational" today for NO_RECORDED_OUTCOMES and SCORE_NOT_YET_COMPUTED.
-	// filter those out of any adverse-action notice.
-	Direction   string `json:"direction"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-}
-
-// ReasonCodeInstance is one ranked reason-code instance for a specific subject,
-// returned inside GET /score/explain under reasonCodes.
-type ReasonCodeInstance struct {
-	Code   string `json:"code"`
-	Factor string `json:"factor"`
-	// Direction is one of the ReasonDirection* constants.
-	Direction   string `json:"direction"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	// Contribution is the importance-weighted contribution in [0,1], the ranking key.
-	Contribution float64 `json:"contribution"`
-	// Rank is 1-based within this instance's direction group.
-	Rank int `json:"rank"`
-	// Evidence holds the specific numbers behind the code, reproducible from the ledger.
-	Evidence map[string]float64 `json:"evidence"`
-}
-
-// ReasonCodeResult is the reasonCodes object attached to GET /score/explain:
-// deterministic factor attribution a partner draws its own Regulation B
-// statement of specific reasons from. Credda supplies the attribution only; it
-// takes no action and issues no notice.
+// # Absence is a pointer, never a zero
 //
-// ⚠️ CHECK InsufficientData FIRST. When it is true, NOTHING is attributable:
-// the record holds no outcomes at all, or it holds outcomes whose score has not
-// been computed yet, and both ranked lists are EMPTY by construction. An absent
-// measurement must never yield an adverse reason.
-type ReasonCodeResult struct {
-	FormulaVersion     string `json:"formulaVersion"`
-	ReasonCodesVersion string `json:"reasonCodesVersion"`
-	// FinalScore is nil when the subject has no computed score.
-	FinalScore     *float64 `json:"finalScore"`
-	Method         string   `json:"method"`
-	KeyFactorLimit int      `json:"keyFactorLimit"`
-	// AdverseActionReasons is ranked most-significant-first. Empty whenever
-	// InsufficientData is true.
-	AdverseActionReasons []ReasonCodeInstance `json:"adverseActionReasons"`
-	// SupportingFactors is ranked. Empty whenever InsufficientData is true.
-	SupportingFactors []ReasonCodeInstance `json:"supportingFactors"`
-	// InformationalFactors are facts about the DATA rather than the record's
-	// performance (NO_RECORDED_OUTCOMES, SCORE_NOT_YET_COMPUTED). Never draw a
-	// statement of specific reasons from this list.
-	InformationalFactors []ReasonCodeInstance `json:"informationalFactors"`
-	// InsufficientData is true when nothing is attributable. Branch on it before
-	// reading either ranked list or FinalScore.
-	InsufficientData bool `json:"insufficientData"`
-	// DataState is one of the DataState* constants and says WHICH kind of
-	// unmeasured this is.
-	DataState   string   `json:"dataState"`
-	Disclosures []string `json:"disclosures"`
-	Advisory    string   `json:"advisory"`
+// encoding/json decodes a JSON null into a non-pointer field as a no-op: the
+// field keeps its zero value and no error is returned. That is fine for a
+// counter and wrong for everything the engine deliberately leaves null.
+//
+// The engine leaves things null on purpose and says so in the serializer: a
+// resolution's Fix is null exactly when the run produced no patch;
+// VerificationVerdict is null when no verification run exists and is "never a
+// stand-in verdict"; Reproduction.TimedOutAttempts is null rather than 0
+// because a record written before the column existed does not say that nothing
+// was killed. Decoded into a plain int, every one of those becomes a confident
+// zero — a claim nothing measured.
+//
+// So every nullable field below is a pointer, and nil is the absence surviving
+// the trip. Where the engine pairs a value with the reason it is absent —
+// ConfidenceClass with NotEstablished, Role with RoleEnforced, State with
+// Outcome — both halves are here, because the engine's rule is that neither can
+// be read alone.
+//
+// # Open bags are json.RawMessage
+//
+// Metadata, Budget, ChangeImpact, Environment.Detail, ValidationEvent.Data and
+// ValidationCheck.Detail are passed through by the engine exactly as it
+// recorded them. serialize.ts says of the environment detail that "no field of
+// it is an API contract yet", and the same holds for the others. Typing them
+// here would be inventing a contract the engine has not made. They arrive as
+// raw JSON for a caller to decode against whatever the engine wrote.
+
+// ── vocabularies ────────────────────────────────────────────────────────────
+//
+// These are the exact `as const` tuples the API's zod schemas validate query
+// parameters against. A value outside one of them is a 400 VALIDATION_FAILED.
+//
+// The states and outcomes a run can report are NOT enumerated as Go constants,
+// because the API does not validate them on the way out and pinning them here
+// would put this client in the business of rejecting a state the engine gained.
+// They are strings. InvestigationStates and InvestigationOutcomes below are the
+// vocabulary as of the API this client was written against; read them, do not
+// switch exhaustively on them.
+
+// InvestigationStates is the state filter vocabulary for ListInvestigations,
+// from INVESTIGATION_STATES in packages/shared/src/states.ts.
+//
+// Absent from this list, and absent from the engine's own: the patch-path
+// states. They are withheld pending a model-backed run, and a state the product
+// cannot currently reach must not appear in a list of states the product has.
+// See ADR 0018: that withholding is a status with a date on it, not a principle,
+// and it moves when the number moves.
+var InvestigationStates = []string{
+	"CREATED",
+	"PREPARING_ENVIRONMENT",
+	"ANALYZING_REPOSITORY",
+	"UNDERSTANDING_ISSUE",
+	"INVESTIGATING",
+	"ATTEMPTING_REPRODUCTION",
+	"REPRODUCED",
+	"DIAGNOSING",
+	"ROOT_CAUSE_IDENTIFIED",
+	"REPRODUCED_AND_DIAGNOSED",
+	"REPRODUCED_NOT_DIAGNOSED",
+	"CONTRADICTS_SPECIFICATION",
+	"ISSUE_ALREADY_RESOLVED",
+	"NO_CHANGE_REQUIRED",
+	"NO_RUNNABLE_CHECK",
+	"REPRODUCTION_FAILED",
+	"INSUFFICIENT_EVIDENCE",
+	"NEEDS_HUMAN_INPUT",
+	"CANCELLED",
+	"FAILED",
 }
 
-// ReasonCodeCatalog is the adverse-action reason-code catalog
-// (GET /api/v1/reason-codes): the stable, versioned meaning of every reason
-// code the scoring explanation can attribute. A B2B2C partner draws its
-// Regulation B statement of specific reasons from a subject's ranked codes
-// (returned on GET /score/explain). Credda supplies the attribution only: it
-// is not a creditor and issues no decision or notice.
-type ReasonCodeCatalog struct {
-	ReasonCodesVersion string `json:"reasonCodesVersion"`
-	FormulaVersion     string `json:"formulaVersion"`
-	Note               string `json:"note"`
-	Method             string `json:"method"`
-	KeyFactorLimit     int    `json:"keyFactorLimit"`
-	KeyFactorGuidance  string `json:"keyFactorGuidance"`
-	// InsufficientDataPolicy states the rule for an UNMEASURED record: it yields
-	// NO adverse reason, in either of the two ways a record can be unmeasured.
-	InsufficientDataPolicy string          `json:"insufficientDataPolicy"`
-	Disclosures            []string        `json:"disclosures"`
-	Codes                  []ReasonCodeDoc `json:"codes"`
+// InvestigationOutcomes is what a finished investigation reports, from OUTCOMES
+// in packages/shared/src/states.ts. It is not a query filter; it is here so a
+// reader knows what Investigation.Outcome can hold.
+var InvestigationOutcomes = []string{
+	"REPRODUCED_AND_DIAGNOSED",
+	"REPRODUCED_NOT_DIAGNOSED",
+	"CONTRADICTS_SPECIFICATION",
+	"NO_CHANGE_REQUIRED",
+	"NO_RUNNABLE_CHECK",
+	"INCONCLUSIVE",
+	"CANCELLED",
+	"ERRORED",
 }
 
-// WebhookEventDoc is one documented outbound event from GET /api/v1/webhooks/events.
-type WebhookEventDoc struct {
-	Type        string         `json:"type"` // one of the Webhook* event constants (score.*, dispute.resolved, monitor.triggered, usage.quota_warning)
-	Description string         `json:"description"`
-	Example     map[string]any `json:"example"`
+// EvidenceTypes is the type filter vocabulary for InvestigationEvidence, from
+// EVIDENCE_TYPES in packages/shared/src/evidence.ts.
+var EvidenceTypes = []string{
+	"TEST_RESULT",
+	"REPRODUCTION",
+	"STACK_TRACE",
+	"LOG",
+	"COMMAND_OUTPUT",
+	"HTTP_RESPONSE",
+	"BROWSER_OBSERVATION",
+	"SCREENSHOT",
+	"CODE_REFERENCE",
+	"GIT_HISTORY",
+	"BUILD_RESULT",
+	"TYPECHECK_RESULT",
+	"LINT_RESULT",
+	"PERFORMANCE_RESULT",
+	"VERIFICATION",
+	"VALUE_OBSERVATION",
+	"SPECIFICATION",
+	"VULNERABILITY",
 }
 
-// WebhookEventCatalog is the outbound webhook event catalog from
-// GET /api/v1/webhooks/events: every event type the API can send, the delivery
-// envelope, an example payload each, and signature-verification guidance.
-type WebhookEventCatalog struct {
-	Envelope   map[string]string `json:"envelope"`
-	Signing    string            `json:"signing"`
-	Advisory   string            `json:"advisory"`
-	Events     []WebhookEventDoc `json:"events"`
-	EventTypes []string          `json:"eventTypes"`
+// ValidationStates is the state filter vocabulary for ListValidations, from
+// VALIDATION_STATES in packages/shared/src/validation.ts.
+var ValidationStates = []string{
+	"CREATED",
+	"ANALYZING_CHANGE",
+	"UNDERSTANDING_INTENT",
+	"PLANNING",
+	"PREPARING_ENVIRONMENT",
+	"RUNNING",
+	"CONFIRMING_FINDINGS",
+	"INVESTIGATING_FINDING",
+	"COMPLETED",
+	"CANCELLED",
+	"FAILED",
 }
 
-// TrustPayload is the public payload from GET /api/v1/verify/:token. It
-// contains no platform user id.
-// FinalScore and ScoreBand are POINTERS because a subject may have no computed
-// score yet. They are nil in that case, never a placeholder. Decoding them as
-// float64/string would turn a JSON null into 0/"", i.e. a score of zero.
-type TrustPayload struct {
-	Token             string   `json:"token"`
-	FinalScore        *float64 `json:"finalScore"`
-	ScoreBand         *string  `json:"scoreBand"`
-	Confidence        float64  `json:"confidence"`
-	VerifiedPlatforms int      `json:"verifiedPlatforms"`
-	TotalEvents       int      `json:"totalEvents"`
-	ScoreFrozen       bool     `json:"scoreFrozen"`
-	FormulaVersion    string   `json:"formulaVersion"`
-	ComputedAt        *string  `json:"computedAt"`
-	Issuer            string   `json:"issuer"`
-
-	// Credential is a signed, offline-verifiable Verifiable Trust Credential
-	// (EdDSA JWT). Optional.
-	Credential    string `json:"credential,omitempty"`
-	CredentialKid string `json:"credentialKid,omitempty"`
-	CredentialExp string `json:"credentialExp,omitempty"`
-	JWKSURI       string `json:"jwksUri,omitempty"`
+// ValidationOutcomes is the outcome filter vocabulary for ListValidations, from
+// VALIDATION_OUTCOMES in packages/shared/src/validation.ts.
+//
+// COMPLETED as a state carries no judgement; the outcome is what was concluded.
+// BLOCKED means the environment would not come up, so nothing was ever asked of
+// the software under test — it is not a product failure and must not be
+// rendered as one. ERRORED is Credda breaking, spelled differently from the
+// FAILED state on purpose: the state says who stopped, the outcome says what
+// was concluded.
+var ValidationOutcomes = []string{
+	"VERIFIED",
+	"FAILED",
+	"BLOCKED",
+	"INCONCLUSIVE",
+	"NO_CHANGE_REQUIRED",
+	"CANCELLED",
+	"ERRORED",
 }
 
-// VerificationMethod is one key entry in a DID document.
-type VerificationMethod struct {
-	ID           string         `json:"id"`
-	Type         string         `json:"type"`
-	Controller   string         `json:"controller"`
-	PublicKeyJWK map[string]any `json:"publicKeyJwk"`
+// ResolutionConfidenceClasses is the confidence filter vocabulary for
+// ListResolutions, from RESOLUTION_CONFIDENCE_CLASSES in
+// packages/shared/src/resolution.ts.
+//
+// An ordinal class, and ResolutionConfidence has no numeric member at all: no
+// score, no ratio, no count a renderer could turn into a percentage. Credda has
+// no calibrated probability model, and the field a reviewer reads to decide
+// whether to trust a fix is the worst possible place to invent a number.
+var ResolutionConfidenceClasses = []string{
+	"ESTABLISHED",
+	"PARTIALLY_ESTABLISHED",
+	"NOT_ESTABLISHED",
 }
 
-// DIDService is one service endpoint in a DID document.
-type DIDService struct {
-	ID              string `json:"id"`
-	Type            string `json:"type"`
-	ServiceEndpoint string `json:"serviceEndpoint"`
+// LearningKinds is the kind filter vocabulary for RepositoryLearnings, from
+// LEARNING_KINDS in packages/memory/src/repository-memory.ts.
+var LearningKinds = []string{
+	"REPRODUCTION_RECIPE",
+	"FRAGILE_SITE",
+	"REJECTED_APPROACH",
+	"NON_DEFECT",
+	"CONVENTION",
 }
 
-// DIDDocument is the did:web document from GET /.well-known/did.json.
-type DIDDocument struct {
-	Context            []string             `json:"@context"`
-	ID                 string               `json:"id"`
-	VerificationMethod []VerificationMethod `json:"verificationMethod"`
-	AssertionMethod    []string             `json:"assertionMethod"`
-	Authentication     []string             `json:"authentication"`
-	Service            []DIDService         `json:"service"`
+// EvidenceStrengths is the ordinal scale on Evidence.Strength, from
+// EVIDENCE_STRENGTHS. Deliberately ordinal rather than a percentage, for the
+// same reason as ResolutionConfidenceClasses.
+var EvidenceStrengths = []string{"STRONG", "MODERATE", "WEAK"}
+
+// EvidencePhases says which side of a before/after comparison an artifact
+// belongs to, from EVIDENCE_PHASES.
+var EvidencePhases = []string{"BEFORE_PATCH", "AFTER_PATCH", "INDEPENDENT"}
+
+// EventSeverities is the severity on an event, from EVENT_SEVERITIES.
+//
+// Events of severity "debug" are filtered out of the events routes unless
+// IncludeDebug is set, and are never sent over a stream at all.
+var EventSeverities = []string{"debug", "info", "warn", "error"}
+
+// ── investigations ──────────────────────────────────────────────────────────
+
+// InvestigationSummary is one row of ListInvestigations.
+//
+// It deliberately carries no RepositoryID: the engine's list serializer omits
+// it. Call GetInvestigation for the full record.
+type InvestigationSummary struct {
+	ID         string  `json:"id"`
+	IssueRef   *string `json:"issueRef"`
+	IssueTitle string  `json:"issueTitle"`
+	State      string  `json:"state"`
+	// Outcome is nil until the run reaches a terminal state. It is never a
+	// stand-in: an unfinished run has concluded nothing.
+	Outcome *string `json:"outcome"`
+	// ProviderID names the model provider the run used, or is nil.
+	ProviderID  *string `json:"providerId"`
+	StartedAt   *string `json:"startedAt"`
+	CompletedAt *string `json:"completedAt"`
+	CreatedAt   string  `json:"createdAt"`
+	// DurationMs is nil unless the run both started and finished. Never negative.
+	DurationMs    *int64 `json:"durationMs"`
+	EventCount    int    `json:"eventCount"`
+	EvidenceCount int    `json:"evidenceCount"`
 }
 
-// RegistryIssuer is a single issuer entry in the trust registry.
-type RegistryIssuer struct {
-	Name            string   `json:"name"`
-	DID             string   `json:"did"`
+// Investigation is the full record.
+type Investigation struct {
+	ID           string  `json:"id"`
+	OrgID        string  `json:"orgId"`
+	RepositoryID string  `json:"repositoryId"`
+	IssueRef     *string `json:"issueRef"`
+	IssueTitle   string  `json:"issueTitle"`
+	IssueBody    string  `json:"issueBody"`
+	State        string  `json:"state"`
+	Outcome      *string `json:"outcome"`
+	ProviderID   *string `json:"providerId"`
+	// Budget is the run's budget record as the engine wrote it. Absent on runs
+	// created without one. No field of it is an API contract.
+	Budget      json.RawMessage `json:"budget,omitempty"`
+	StartedAt   *string         `json:"startedAt"`
+	CompletedAt *string         `json:"completedAt"`
+	// Error is set when the run itself broke, which is Credda failing rather
+	// than a defect being found.
+	Error      *string `json:"error"`
+	CreatedAt  string  `json:"createdAt"`
+	UpdatedAt  string  `json:"updatedAt"`
+	DurationMs *int64  `json:"durationMs"`
+}
+
+// Hypothesis is a candidate cause the run considered, with the evidence for and
+// against it. Both lists travel, because a hypothesis shown without what
+// contradicts it is an assertion.
+type Hypothesis struct {
+	ID                       string   `json:"id"`
+	InvestigationID          string   `json:"investigationId"`
+	Description              string   `json:"description"`
+	Rank                     int      `json:"rank"`
+	Status                   string   `json:"status"`
+	SupportingEvidenceIDs    []string `json:"supportingEvidenceIds"`
+	ContradictingEvidenceIDs []string `json:"contradictingEvidenceIds"`
+	CreatedAt                string   `json:"createdAt"`
+	UpdatedAt                string   `json:"updatedAt"`
+}
+
+// Patch is a proposed change: the diff, the files it touches, and why.
+//
+// The engine's patch path is currently withheld pending a model-backed run, so
+// on today's deployments this list is empty. That is a status with a date on it
+// and not a statement about what Credda is: writing the fix is the product, and
+// the patch path returns on evidence. See ADR 0018.
+type Patch struct {
+	ID              string   `json:"id"`
+	InvestigationID string   `json:"investigationId"`
+	Attempt         int      `json:"attempt"`
+	UnifiedDiff     string   `json:"unifiedDiff"`
+	FilesChanged    []string `json:"filesChanged"`
+	Insertions      int      `json:"insertions"`
+	Deletions       int      `json:"deletions"`
+	Rationale       string   `json:"rationale"`
 	Status          string   `json:"status"`
-	CredentialTypes []string `json:"credentialTypes"`
-	DIDDocument     string   `json:"didDocument"`
-	JWKSURI         string   `json:"jwksUri"`
+	CreatedAt       string   `json:"createdAt"`
+	UpdatedAt       string   `json:"updatedAt"`
 }
 
-// TrustRegistry comes from GET /.well-known/credda-trust-registry.json:
-// Credda's own issuer entry plus any federated issuers it recognizes.
-type TrustRegistry struct {
-	Version string           `json:"version"`
-	Issuers []RegistryIssuer `json:"issuers"`
+// Verification is an executed check of a patch: the verdict, and the signals it
+// was derived from. The verdict is a mechanical function of the signals, never
+// a model's opinion, which is why both travel.
+type Verification struct {
+	ID              string              `json:"id"`
+	InvestigationID string              `json:"investigationId"`
+	PatchID         string              `json:"patchId"`
+	Verdict         string              `json:"verdict"`
+	Signals         VerificationSignals `json:"signals"`
+	Notes           *string             `json:"notes"`
+	CreatedAt       string              `json:"createdAt"`
 }
 
-// TrustExportScore is the plaintext score block of a trust export.
-// FinalScore and ScoreBand are POINTERS because a subject may have no computed
-// score yet. They are nil in that case, never a placeholder. Decoding them as
-// float64/string would turn a JSON null into 0/"", i.e. a score of zero.
-type TrustExportScore struct {
-	FinalScore     *float64 `json:"finalScore"`
-	ScoreBand      *string  `json:"scoreBand"`
-	Confidence     float64  `json:"confidence"`
-	FormulaVersion string   `json:"formulaVersion"`
-	ComputedAt     *string  `json:"computedAt"`
-	ScoreFrozen    bool     `json:"scoreFrozen"`
-}
-
-// TrustExportHistoryEntry is one historical snapshot in a trust export.
-type TrustExportHistoryEntry struct {
-	FinalScore float64 `json:"finalScore"`
-	ScoreBand  string  `json:"scoreBand"`
-	ComputedAt string  `json:"computedAt"`
-}
-
-// TrustExport is the portable, self-verifying bundle from
-// GET /api/v1/verify/:token/export.
-type TrustExport struct {
-	Format     string `json:"format"` // "credda-trust-export/1"
-	ExportedAt string `json:"exportedAt"`
-	Subject    struct {
-		Token string `json:"token"`
-	} `json:"subject"`
-	Score    TrustExportScore `json:"score"`
-	Activity struct {
-		VerifiedPlatforms int `json:"verifiedPlatforms"`
-		TotalEvents       int `json:"totalEvents"`
-	} `json:"activity"`
-	History []TrustExportHistoryEntry `json:"history"`
-	// Credential holds a signed W3C VC-JWT (offline-verifiable).
-	Credential struct {
-		Format string `json:"format"` // "jwt_vc_json"
-		VC     string `json:"vc"`
-		Issuer string `json:"issuer"`
-	} `json:"credential"`
-	Revocation struct {
-		StatusListCredential string `json:"statusListCredential"`
-	} `json:"revocation"`
-	HowToVerify string `json:"howToVerify"`
-}
-
-// ─── Scores ──────────────────────────────────────────────────────────────────
-
-// ScoreBreakdown is the raw factor breakdown behind a score.
-type ScoreBreakdown struct {
-	CR                      float64 `json:"cr"`
-	OTR                     float64 `json:"otr"`
-	DR                      float64 `json:"dr"`
-	VD                      float64 `json:"vd"`
-	PlatformTrustMultiplier float64 `json:"platformTrustMultiplier"`
-	ConsistencyFactor       float64 `json:"consistencyFactor"`
-	MomentumFactor          float64 `json:"momentumFactor"`
-}
-
-// ScorePayload comes from GET /api/v1/users/:id/score.
-// FinalScore and ScoreBand are POINTERS because a subject may have no computed
-// score yet. They are nil in that case, never a placeholder. Decoding them as
-// float64/string would turn a JSON null into 0/"", i.e. a score of zero.
-// Breakdown is likewise nil when there is no snapshot: a zeroed breakdown reads
-// as a PERFECT record (dr 0 = no disputes, multipliers 1 = ideal).
-type ScorePayload struct {
-	UserID         string          `json:"userId"`
-	FinalScore     *float64        `json:"finalScore"`
-	ScoreBand      *string         `json:"scoreBand"`
-	Confidence     float64         `json:"confidence"`
-	Breakdown      *ScoreBreakdown `json:"breakdown"`
-	FormulaVersion *string         `json:"formulaVersion"`
-	VelocityFlag   bool            `json:"velocityFlag"`
-	ComputedAt     *string         `json:"computedAt"`
-	ScoreFrozen    *bool           `json:"scoreFrozen,omitempty"`
-	FrozenAt       *string         `json:"frozenAt,omitempty"`
-}
-
-// BatchScoreEntry is one entry in a batch score read. Unknown ids come back
-// with Error == "not_found" and no score fields set. Check Error first.
-type BatchScoreEntry struct {
-	UserID      string   `json:"userId"`
-	FinalScore  *float64 `json:"finalScore,omitempty"`
-	ScoreBand   *string  `json:"scoreBand,omitempty"`
-	ScoreFrozen *bool    `json:"scoreFrozen,omitempty"`
-	Error       string   `json:"error,omitempty"`
-}
-
-// BatchScoresPayload comes from POST /api/v1/users/scores.
-type BatchScoresPayload struct {
-	Scores         []BatchScoreEntry `json:"scores"`
-	Count          int               `json:"count"`
-	FormulaVersion string            `json:"formulaVersion"`
-}
-
-// ScoreExplainFactor is one factor in a plain-language score explanation.
+// VerificationSignals is what was actually run, before and after the patch.
 //
-// ⚠️ UNMEASURED IS NOT ZERO. Branch on Available before reading Value or
-// Contribution: the API sends JSON null for both whenever the record holds no
-// outcomes, and encoding/json silently leaves a non-pointer float64 at 0.0 in
-// that case. A 0.0 here would read as "completed none of them" about a record
-// that was never measured.
-type ScoreExplainFactor struct {
-	// Key is the stable machine key for this row: "completionRate",
-	// "onTimeRate", "disputeRate", "verificationDepth",
-	// "verifiedProfessionalGrounding". Match on this, never on Name: the human
-	// label has been renamed before and will be again.
-	Key  string `json:"key"`
-	Name string `json:"name"`
-	// Value is the factor value in [0,1]. VALID ONLY WHEN Available IS TRUE.
-	Value float64 `json:"value"`
-	// Weight is the fraction of the score this factor carries, in [0,1], e.g.
-	// 0.37. It is DERIVED from GET /api/v1/scoring/model, so it is the weight
-	// the engine actually applied.
-	//
-	// This was declared string until 2026-08-10, and that was not a narrow type,
-	// it was the wrong one: the API split the field on 2026-08-09 into a numeric
-	// weight and a separate WeightPercent label, and encoding/json refuses a
-	// number into a string with a hard UnmarshalTypeError rather than a zero
-	// value. GetScoreExplain therefore returned (nil, error) against the live
-	// API for every caller, so no Go consumer can have been decoding this
-	// successfully and no Go consumer can be broken by the correction.
-	Weight float64 `json:"weight"`
-	// WeightPercent is the same weight rendered for display, e.g. "37%". Use it
-	// instead of formatting Weight yourself, so a change to how the API rounds
-	// does not have to be mirrored here.
-	WeightPercent string `json:"weightPercent"`
-	// Contribution is weight × value. VALID ONLY WHEN Available IS TRUE.
-	Contribution float64 `json:"contribution"`
-	// Available is false when the record has no data from which to measure this
-	// factor. This is the field to branch on.
-	Available   bool   `json:"available"`
-	Description string `json:"description"`
+// The core claim a fix makes is that the demonstrated failure is gone:
+// ReproductionBefore FAIL and ReproductionAfter PASS. RegressionTestBefore /
+// After is the test that fails before and passes after — the proof that the
+// test agrees with the patch rather than with the author. Every field is one of
+// FAIL, PASS, NOT_RUN; Build, Typecheck and Lint may also be NOT_APPLICABLE.
+type VerificationSignals struct {
+	ReproductionBefore   string `json:"reproductionBefore"`
+	ReproductionAfter    string `json:"reproductionAfter"`
+	RegressionTestBefore string `json:"regressionTestBefore"`
+	RegressionTestAfter  string `json:"regressionTestAfter"`
+	// ExistingTests is nil when the repository's own suite was not run. A nil
+	// here is not "nothing failed".
+	ExistingTests *ExistingTests `json:"existingTests"`
+	Build         string         `json:"build"`
+	Typecheck     string         `json:"typecheck"`
+	Lint          string         `json:"lint"`
 }
 
-// ScoreExplainPayload comes from GET /api/v1/users/:id/score/explain.
-type ScoreExplainPayload struct {
-	Summary string               `json:"summary"`
-	Factors []ScoreExplainFactor `json:"factors"`
-	// DataSufficiency is the explicit insufficient-data state for the whole
-	// explanation. Render it when InsufficientData is true instead of reading a
-	// rate off an unmeasured record. Present on every response, including the
-	// empty-record one (where Factors is empty).
-	DataSufficiency *DataSufficiency `json:"dataSufficiency,omitempty"`
-	// ReasonCodes is the deterministic adverse-action attribution (ECOA / Reg B)
-	// for this record. Check ReasonCodes.InsufficientData before drawing a
-	// statement of specific reasons from it.
-	ReasonCodes   *ReasonCodeResult `json:"reasonCodes,omitempty"`
-	PlatformTrust *struct {
-		Explanation string  `json:"explanation"`
-		AppliedTier string  `json:"appliedTier"`
-		Multiplier  float64 `json:"multiplier"`
-	} `json:"platformTrust,omitempty"`
-	Consistency *struct {
-		Factor      float64 `json:"factor"`
-		Description string  `json:"description"`
-	} `json:"consistency,omitempty"`
-	Momentum *struct {
-		Factor      float64 `json:"factor"`
-		Direction   string  `json:"direction"`
-		Description string  `json:"description"`
-	} `json:"momentum,omitempty"`
-	Confidence struct {
-		EventsRecorded      int    `json:"eventsRecorded"`
-		EventsNeededForFull int    `json:"eventsNeededForFull"`
-		Level               string `json:"level"`
-	} `json:"confidence"`
-	RecencyWarning *string `json:"recencyWarning,omitempty"`
-	ComputedAt     string  `json:"computedAt,omitempty"`
+// ExistingTests is the repository's own suite, as counted by a run of it.
+type ExistingTests struct {
+	Passed int `json:"passed"`
+	Failed int `json:"failed"`
+	Total  int `json:"total"`
 }
 
-// ScoreHistoryPayload comes from GET /api/v1/users/:id/score/history. The
-// snapshot rows are left as raw maps, matching the TS SDK's
-// `Array<Record<string, unknown>>`.
-type ScoreHistoryPayload struct {
-	Data  []map[string]any `json:"data"`
-	Count int              `json:"count"`
-	// NextCursor: pass as Cursor to fetch the next page; nil once exhausted.
-	NextCursor *string `json:"nextCursor,omitempty"`
+// FailureSignature is a captured observation of a failure: the exact command,
+// what it exited with, and what it produced, normalized so two runs of the same
+// failure compare equal.
+type FailureSignature struct {
+	// Command is the exact command that produced this observation.
+	Command  string `json:"command"`
+	ExitCode *int   `json:"exitCode"`
+	// ErrorClass is e.g. "TypeError", "AssertionError", "ENOENT". Nil when not
+	// classifiable.
+	ErrorClass *string `json:"errorClass"`
+	// NormalizedMessage has absolute paths, timestamps and hex addresses
+	// stripped, which is what makes the hash stable across machines.
+	NormalizedMessage *string `json:"normalizedMessage"`
+	// OriginFile is the innermost stack frame inside the repository under
+	// investigation, if any.
+	OriginFile *string `json:"originFile"`
+	OriginLine *int    `json:"originLine"`
+	// FailingTestIDs is populated when the command was a test run.
+	FailingTestIDs []string `json:"failingTestIds"`
+	// ValueObservation is the reported wrong value, when the command was a
+	// synthesised value assertion rather than a crashing program. Absent on
+	// every crash signature: a silent wrong-value defect has no error class, no
+	// stack and no failing test id, and the engine will not fabricate them.
+	ValueObservation json.RawMessage `json:"valueObservation,omitempty"`
+	// Hash is a stable hash over the fields above, for cheap equality checks.
+	Hash string `json:"hash"`
 }
 
-// ScoreHistoryQuery are the optional filters for GetScoreHistory.
-type ScoreHistoryQuery struct {
-	From   string // ISO-8601
-	To     string // ISO-8601
-	Limit  *int
-	Cursor string
+// Evidence is one recorded observation. Every material claim Credda makes cites
+// evidence IDs, and evidence outlives the sandbox that produced it.
+type Evidence struct {
+	ID              string `json:"id"`
+	InvestigationID string `json:"investigationId"`
+	// CheckID is set on evidence reached through a validation, naming the check
+	// that cited it. Nil on investigation evidence.
+	CheckID *string `json:"checkId,omitempty"`
+	Type    string  `json:"type"`
+	Phase   string  `json:"phase"`
+	// Strength is an ordinal label (see EvidenceStrengths), not a probability.
+	Strength string `json:"strength"`
+	Summary  string `json:"summary"`
+	// ContentRef points into the artifact store at the full captured artifact.
+	// This API serves no route that fetches one.
+	ContentRef *string         `json:"contentRef"`
+	Metadata   json.RawMessage `json:"metadata"`
+	// Signature is the captured failure this evidence records, or nil when the
+	// observation was not a failure.
+	Signature *FailureSignature `json:"signature"`
+	CreatedAt string            `json:"createdAt"`
 }
 
-// FactorDelta is one factor's movement between two score computations.
-// Factor is one of "CR", "OTR", "DR", "VD".
-type FactorDelta struct {
-	Factor   string  `json:"factor"`
-	Before   float64 `json:"before"`
-	After    float64 `json:"after"`
-	Delta    float64 `json:"delta"`
-	Improved bool    `json:"improved"`
+// Event is one entry on an investigation's timeline.
+type Event struct {
+	ID              string `json:"id"`
+	InvestigationID string `json:"investigationId"`
+	// Sequence is the monotonic cursor. It is what NextSince and a stream's
+	// Last-Event-ID carry.
+	Sequence int    `json:"sequence"`
+	Type     string `json:"type"`
+	Severity string `json:"severity"`
+	Summary  string `json:"summary"`
+	// State is the investigation state at the time of the event, when the event
+	// was a transition.
+	State       *string         `json:"state"`
+	AgentRunID  *string         `json:"agentRunId"`
+	ToolCallID  *string         `json:"toolCallId"`
+	EvidenceIDs []string        `json:"evidenceIds"`
+	Metadata    json.RawMessage `json:"metadata"`
+	CreatedAt   string          `json:"createdAt"`
 }
 
-// ScoreSnapshotRef is a minimal reference to one score computation.
-type ScoreSnapshotRef struct {
-	FinalScore float64 `json:"finalScore"`
-	ComputedAt string  `json:"computedAt"`
-}
-
-// ScoreDeltaPayload comes from GET /api/v1/users/:id/score/delta. Available is
-// false until at least two computations exist.
-type ScoreDeltaPayload struct {
-	UserID          string            `json:"userId"`
-	Available       bool              `json:"available"`
-	From            *ScoreSnapshotRef `json:"from,omitempty"`
-	To              *ScoreSnapshotRef `json:"to,omitempty"`
-	ScoreDelta      *float64          `json:"scoreDelta,omitempty"`
-	Direction       string            `json:"direction,omitempty"` // "up" | "down" | "unchanged"
-	ConfidenceDelta *float64          `json:"confidenceDelta,omitempty"`
-	MomentumDelta   *float64          `json:"momentumDelta,omitempty"`
-	Factors         []FactorDelta     `json:"factors,omitempty"`
-	TopDriver       *FactorDelta      `json:"topDriver,omitempty"`
-	FormulaVersion  string            `json:"formulaVersion,omitempty"`
-}
-
-// ScoreComponent is one named, independently 0–100-scored component. Key is
-// one of: reliability, timeliness, trustworthiness, verification, consistency,
-// momentum.
+// InvestigationList is the ListInvestigations response.
 //
-// ⚠️ UNMEASURED IS NOT ZERO. Score is a POINTER, and nil means NOT MEASURED:
+// Total is the count of everything matching the state filter in this
+// organisation, not the length of Investigations, so a caller can tell it is
+// holding one page.
+type InvestigationList struct {
+	Investigations []InvestigationSummary `json:"investigations"`
+	Total          int                    `json:"total"`
+}
+
+// InvestigationDetail is the GetInvestigation and CreateInvestigation response.
 //
-//	for _, c := range payload.Components {
-//	    if c.Score == nil {
-//	        fmt.Printf("%s: not measured\n", c.Label) // NOT "0"
-//	        continue
-//	    }
-//	    fmt.Printf("%s: %.0f\n", c.Label, *c.Score)
-//	}
+// Patches and Verifications are empty on a deployment whose patch path is
+// withheld. EvidenceCount is a count of the whole evidence set, which is paged
+// separately by InvestigationEvidence.
+type InvestigationDetail struct {
+	Investigation Investigation  `json:"investigation"`
+	Hypotheses    []Hypothesis   `json:"hypotheses"`
+	Patches       []Patch        `json:"patches"`
+	Verifications []Verification `json:"verifications"`
+	EvidenceCount int            `json:"evidenceCount"`
+	// LatestSequence is the highest event sequence written so far. Compare it
+	// with an events page's NextSince to know whether you are caught up.
+	LatestSequence int `json:"latestSequence"`
+}
+
+// EventPage is the InvestigationEvents response.
+type EventPage struct {
+	Events []Event `json:"events"`
+	// LatestSequence is the newest sequence on the investigation, regardless of
+	// this page.
+	LatestSequence int `json:"latestSequence"`
+	// NextSince is the cursor to pass as Since for the following page. It comes
+	// from the page BEFORE debug events were filtered out, so resuming from it
+	// skips nothing.
+	NextSince int `json:"nextSince"`
+	// HasMore reports whether the page was truncated. It is computed before the
+	// debug filter, so an empty Events with HasMore true means the page held
+	// only debug events, not that the timeline ended.
+	HasMore bool `json:"hasMore"`
+}
+
+// EvidencePage is the InvestigationEvidence response. Total is the size of the
+// filtered set, not of the page.
+type EvidencePage struct {
+	Evidence []Evidence `json:"evidence"`
+	Total    int        `json:"total"`
+}
+
+// ── repositories ────────────────────────────────────────────────────────────
+
+// Repository is a repository registered with this organisation.
+type Repository struct {
+	ID    string `json:"id"`
+	OrgID string `json:"orgId"`
+	Name  string `json:"name"`
+	// Source is a clone URL for a remote repository. For a LOCAL CHECKOUT it is
+	// not a path: the engine reduces a host path to `local:<final segment>`, so
+	// that the operator's own directory layout, username included, does not
+	// cross the wire. A value starting `local:` is a label, never something to
+	// clone or open.
+	Source        string `json:"source"`
+	DefaultBranch string `json:"defaultBranch"`
+	CreatedAt     string `json:"createdAt"`
+}
+
+// RepositoryList is the ListRepositories response.
+type RepositoryList struct {
+	Repositories []Repository `json:"repositories"`
+	Total        int          `json:"total"`
+}
+
+// Learning is something Credda has learned about a repository across runs.
 //
-// The API sends JSON null for Score whenever a component is not measurable
-// (today: the record has no recorded outcomes, so every rate has a zero
-// denominator). encoding/json decodes a null into a non-pointer float64 as a
-// NO-OP (no error, field untouched), which is why this field is *float64: a
-// plain float64 would read 0.0 in exactly that case, and in a product whose
-// bands run down to At Risk a 0.0 is the worst possible record, not an unknown
-// one. Available carries the same fact as a bool and is equally safe to branch
-// on. A MEASURED zero is a non-nil pointer to 0 with Available: true and must
-// still be displayed: hiding real bad news is a worse failure than the
-// substitution this rule exists to prevent.
-type ScoreComponent struct {
-	Key   string `json:"key"`
-	Label string `json:"label"`
-	// Score is 0–100, or nil when the component was not measured at all.
-	// Available carries the same fact as a bool.
-	Score *float64 `json:"score"`
-	// Weight is the share of the weighted raw score this component drives, or nil
-	// for the two multiplicative modifiers (consistency, momentum).
-	Weight *float64 `json:"weight"`
-	// Available is false when there is not enough data to measure this component
-	// at all. False does NOT mean the component scored badly; it means there was
-	// nothing to measure. This is the field to branch on.
-	Available   bool   `json:"available"`
-	Description string `json:"description"`
+// Weight is an ordinal label derived from Observations, not a probability.
+// The engine's `metadata` bag is deliberately not served on this record: it is
+// written by the engine and has no reviewed client contract.
+type Learning struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	Summary string `json:"summary"`
+	// FilePath and Symbol are set on learnings anchored to a place in the code,
+	// such as a FRAGILE_SITE, and nil on the rest.
+	FilePath *string `json:"filePath"`
+	Symbol   *string `json:"symbol"`
+	// Observations is how many times this has been independently observed.
+	Observations int    `json:"observations"`
+	Weight       string `json:"weight"`
+	// InvestigationIDs are the runs that produced or reinforced this.
+	InvestigationIDs []string `json:"investigationIds"`
+	CreatedAt        string   `json:"createdAt"`
+	LastSeenAt       string   `json:"lastSeenAt"`
 }
 
-// DataSufficiency is the explicit insufficient-data state carried by
-// GET /score/components and GET /score/explain.
+// LearningPage is the RepositoryLearnings response.
 //
-// Render THIS when InsufficientData is true, rather than inventing "0%
-// completion" for a record that has never been measured. No history is UNKNOWN,
-// never BAD.
-type DataSufficiency struct {
-	// InsufficientData is true when the record holds NO outcome events at all.
-	InsufficientData bool `json:"insufficientData"`
-	// State is "ok" or the specific reason nothing can be measured
-	// ("no_recorded_outcomes").
-	State            string `json:"state"`
-	RecordedOutcomes int    `json:"recordedOutcomes"`
-	VerifiedOutcomes int    `json:"verifiedOutcomes"`
-	// Note is plain-language copy that is safe to show verbatim.
-	Note string `json:"note"`
+// An empty page is a real answer: a repository Credda has learned nothing about
+// yet is an empty list, not a 404. "We know nothing here" is information.
+type LearningPage struct {
+	Learnings []Learning `json:"learnings"`
+	Total     int        `json:"total"`
 }
 
-// ScoreComponentsPayload comes from GET /api/v1/users/:id/score/components.
+// ── resolutions ─────────────────────────────────────────────────────────────
+
+// ResolutionSummary is one row of ListResolutions.
 //
-// The top-level Available reports whether a score has been COMPUTED at all; the
-// per-component Available reports whether each component is MEASURABLE. They are
-// different questions: a computed snapshot over an empty outcome ledger returns
-// Available: true with every component Available: false.
-type ScoreComponentsPayload struct {
-	UserID     string           `json:"userId"`
-	Available  bool             `json:"available"`
-	FinalScore *float64         `json:"finalScore,omitempty"`
-	ScoreBand  string           `json:"scoreBand,omitempty"`
-	Components []ScoreComponent `json:"components"`
-	// DataSufficiency is present on every response, including the empty-record
-	// one (where Components is empty). Nil only when talking to an API older than
-	// the field.
-	DataSufficiency *DataSufficiency `json:"dataSufficiency,omitempty"`
-	ComputedAt      string           `json:"computedAt,omitempty"`
-	FormulaVersion  string           `json:"formulaVersion,omitempty"`
-}
-
-// ─── Verified Earnings ───────────────────────────────────────────────────────
-
-// EarningsQuery selects the attestation window. From overrides Months.
-type EarningsQuery struct {
-	Months *int
-	From   string
-	To     string
-}
-
-// EarningsWindow is the resolved window an attestation covers.
-type EarningsWindow struct {
-	From   string `json:"from"`
-	To     string `json:"to"`
-	Months int    `json:"months"`
-}
-
-// EarningsPlatformTotal is one platform's contribution to an attested total.
-type EarningsPlatformTotal struct {
-	Platform   string  `json:"platform"`
-	Gross      float64 `json:"gross"`
-	EventCount int     `json:"eventCount"`
-}
-
-// EarningsPeriod is one UTC calendar month. Months with no earnings are present with 0.
-type EarningsPeriod struct {
-	Month             string                  `json:"month"`
-	GrossVerified     float64                 `json:"grossVerified"`
-	EventCount        int                     `json:"eventCount"`
-	PlatformBreakdown []EarningsPlatformTotal `json:"platformBreakdown"`
-}
-
-// EarningsAttested holds the VERIFIED-only totals. Unverified value never appears here.
-type EarningsAttested struct {
-	GrossVerified     float64                 `json:"grossVerified"`
-	EventCount        int                     `json:"eventCount"`
-	Trailing12mTotal  float64                 `json:"trailing12mTotal"`
-	PlatformCount     int                     `json:"platformCount"`
-	PlatformBreakdown []EarningsPlatformTotal `json:"platformBreakdown"`
-}
-
-// EarningsStability holds the volatility/consistency metrics.
-// CoefficientOfVariation is nil when there is no income to vary, never coerced to 0.
-type EarningsStability struct {
-	MonthsWithEarnings       int      `json:"monthsWithEarnings"`
-	MedianMonthly            float64  `json:"medianMonthly"`
-	MeanMonthly              float64  `json:"meanMonthly"`
-	CoefficientOfVariation   *float64 `json:"coefficientOfVariation"`
-	LongestConsecutiveMonths int      `json:"longestConsecutiveMonths"`
-}
-
-// EarningsUnverified is value that was REPORTED but not attested. It is never
-// blended into any attested figure.
-type EarningsUnverified struct {
-	Gross      float64 `json:"gross"`
-	EventCount int     `json:"eventCount"`
-}
-
-// EarningsExcluded records what was left out, so the omission is visible.
-type EarningsExcluded struct {
-	DisputedEvents  int     `json:"disputedEvents"`
-	DisputedValue   float64 `json:"disputedValue"`
-	ValuelessEvents int     `json:"valuelessEvents"`
-}
-
-// EarningsCoverage lets a consumer judge completeness of the record.
-type EarningsCoverage struct {
-	VerifiedShare     *float64 `json:"verifiedShare"`
-	SelfReportedShare *float64 `json:"selfReportedShare"`
-}
-
-// VerifiedEarnings comes from GET /api/v1/users/:id/earnings, an attestation of
-// income ALREADY RECORDED on the ledger. Currency is always null: amounts are
-// platform-reported units. This is not an income verification for a credit
-// decision and not a consumer report; see Disclosures.
-type VerifiedEarnings struct {
-	UserID             string             `json:"userId,omitempty"`
-	EarningsVersion    string             `json:"earningsVersion"`
-	Note               string             `json:"note"`
-	Window             EarningsWindow     `json:"window"`
-	Periods            []EarningsPeriod   `json:"periods"`
-	Attested           EarningsAttested   `json:"attested"`
-	Stability          EarningsStability  `json:"stability"`
-	UnverifiedReported EarningsUnverified `json:"unverifiedReported"`
-	Excluded           EarningsExcluded   `json:"excluded"`
-	Coverage           EarningsCoverage   `json:"coverage"`
-	Disclosures        []string           `json:"disclosures"`
-}
-
-// EarningsSummary comes from GET /api/v1/users/:id/earnings/summary.
-type EarningsSummary struct {
-	UserID                   string         `json:"userId,omitempty"`
-	EarningsVersion          string         `json:"earningsVersion"`
-	Note                     string         `json:"note"`
-	Window                   EarningsWindow `json:"window"`
-	Trailing12mVerifiedTotal float64        `json:"trailing12mVerifiedTotal"`
-	MedianMonthly            float64        `json:"medianMonthly"`
-	MonthsWithEarnings       int            `json:"monthsWithEarnings"`
-	Volatility               *float64       `json:"volatility"`
-	VerifiedShare            *float64       `json:"verifiedShare"`
-	SelfReportedShare        *float64       `json:"selfReportedShare"`
-	PlatformCount            int            `json:"platformCount"`
-	LongestConsecutiveMonths int            `json:"longestConsecutiveMonths"`
-	Disclosures              []string       `json:"disclosures"`
-}
-
-// EarningsCredentialResult comes from POST /api/v1/users/:id/earnings/credential,
-// a signed, revocable W3C Verifiable Credential of type CreddaEarningsCredential.
-type EarningsCredentialResult struct {
-	Format          string         `json:"format"`
-	CredentialVC    string         `json:"credentialVc"`
-	CredentialType  string         `json:"credentialType"`
-	Issuer          string         `json:"issuer"`
-	Kid             string         `json:"kid"`
-	Scope           string         `json:"scope"`
-	EarningsVersion string         `json:"earningsVersion"`
-	Claims          map[string]any `json:"claims"`
-	IssuedAt        string         `json:"issuedAt"`
-	ExpiresAt       string         `json:"expiresAt"`
-	DIDDocument     string         `json:"didDocument"`
-	TrustRegistry   string         `json:"trustRegistry"`
-	StatusList      string         `json:"statusList"`
-}
-
-// ─── Timeline ────────────────────────────────────────────────────────────────
-
-// TimelineDispute is the dispute marker on a timeline event item.
-type TimelineDispute struct {
-	Status     string  `json:"status"`
-	ResolvedAt *string `json:"resolvedAt"`
-}
-
-// TimelineItem is one entry in a user's timeline. It is a flattened union of
-// the TS SDK's two variants. Check Type ("event" or "score_change") to know
-// which fields are populated.
-type TimelineItem struct {
-	Type       string `json:"type"`
-	ID         string `json:"id"`
-	OccurredAt string `json:"occurredAt"`
-
-	// Type == "event"
-	EventType    string           `json:"eventType,omitempty"`
-	PlatformName string           `json:"platformName,omitempty"`
-	IsVerified   *bool            `json:"isVerified,omitempty"`
-	StakeLevel   string           `json:"stakeLevel,omitempty"`
-	DaysLate     *float64         `json:"daysLate,omitempty"`
-	Dispute      *TimelineDispute `json:"dispute,omitempty"`
-
-	// Type == "score_change"
-	FinalScore *float64     `json:"finalScore,omitempty"`
-	ScoreBand  string       `json:"scoreBand,omitempty"`
-	ScoreDelta *float64     `json:"scoreDelta,omitempty"`
-	Direction  *string      `json:"direction,omitempty"`
-	TopDriver  *FactorDelta `json:"topDriver,omitempty"`
-}
-
-// TimelinePayload comes from GET /api/v1/users/:id/timeline.
-type TimelinePayload struct {
-	Data       []TimelineItem `json:"data"`
-	Count      int            `json:"count"`
-	NextCursor *string        `json:"nextCursor"`
-}
-
-// TimelineQuery are the optional pagination params for GetTimeline.
-type TimelineQuery struct {
-	Limit  *int
-	Cursor string
-}
-
-// ─── Projection ──────────────────────────────────────────────────────────────
-
-// ProjectionEventInput is one hypothetical prospective event for ProjectScore.
-// Only EventType is required.
-type ProjectionEventInput struct {
-	EventType        string   `json:"eventType"`
-	StakeLevel       string   `json:"stakeLevel,omitempty"`   // HIGH | MEDIUM | LOW
-	PlatformTier     string   `json:"platformTier,omitempty"` // ENTERPRISE | GROWTH | STARTER | SELF_REPORTED
-	IsVerified       *bool    `json:"isVerified,omitempty"`
-	DaysLate         *float64 `json:"daysLate,omitempty"`
-	TransactionValue *float64 `json:"transactionValue,omitempty"`
-}
-
-// ScoreBandRef pairs a score with its band.
-type ScoreBandRef struct {
-	FinalScore float64 `json:"finalScore"`
-	ScoreBand  string  `json:"scoreBand"`
-}
-
-// TimelinessDisclosure reports what a batch of hypothetical claims did, and did
-// not, state about lateness.
-//
-// An unstated lateness is NOT a claim of punctuality. The model gives an outcome
-// with no recorded deadline full timeliness credit, so a projection over
-// unstated claims is a BEST case: supplying the real lateness can only lower it.
-// Branch on ProjectionIsUpperBound before presenting a projected number as a
-// point estimate.
-type TimelinessDisclosure struct {
-	// StatedEvents counts the claims that stated a lateness. A stated 0 is a
-	// claim of punctuality the caller made; an unstated one is a fact nobody
-	// supplied. They are not interchangeable.
-	StatedEvents   int `json:"statedEvents"`
-	UnstatedEvents int `json:"unstatedEvents"`
-	// Basis is "stated", "partially_stated" or "unstated".
-	Basis string `json:"basis"`
-	// ProjectionIsUpperBound is true when at least one claim left its lateness
-	// unstated, which makes every projection in the response a best case.
-	ProjectionIsUpperBound bool `json:"projectionIsUpperBound"`
-	// Note states plainly what was and was not assumed. Safe to show verbatim.
-	Note string `json:"note"`
-	// ProjectedIfUnstatedWereLate is the other end of the range the request left
-	// open: the same projection with every unstated lateness at the model's floor
-	// point. Nil when nothing was left unstated. Present on ProjectScore only.
-	ProjectedIfUnstatedWereLate *ProjectedBound `json:"projectedIfUnstatedWereLate,omitempty"`
-}
-
-// ProjectedBound is a projected score/band/delta at one end of a bounded range.
-type ProjectedBound struct {
-	FinalScore float64 `json:"finalScore"`
-	ScoreBand  string  `json:"scoreBand"`
-	Delta      float64 `json:"delta"`
-}
-
-// ScoreProjectionPayload comes from POST /api/v1/users/:id/score/project.
-type ScoreProjectionPayload struct {
-	UserID         string       `json:"userId"`
-	Delta          float64      `json:"delta"`
-	Current        ScoreBandRef `json:"current"`
-	Projected      ScoreBandRef `json:"projected"`
-	BandChanged    bool         `json:"bandChanged"`
-	FormulaVersion string       `json:"formulaVersion"`
-	// Timeliness says what the request stated about lateness, and whether the
-	// projection above is an upper bound rather than a point estimate.
-	Timeliness *TimelinessDisclosure `json:"timeliness,omitempty"`
-}
-
-// ─── Platforms / risk / usage ────────────────────────────────────────────────
-
-// ContributingPlatform is one platform contributing to a user's score.
-type ContributingPlatform struct {
-	PlatformName       string `json:"platformName"`
-	TrustTier          string `json:"trustTier"`
-	EventCount         int    `json:"eventCount"`
-	VerifiedEventCount int    `json:"verifiedEventCount"`
-	CountsTowardVD     bool   `json:"countsTowardVD"`
-}
-
-// PlatformsPayload comes from GET /api/v1/users/:id/platforms.
-type PlatformsPayload struct {
-	Platforms []ContributingPlatform `json:"platforms"`
-}
-
-// RiskSignal is one advisory anti-gaming signal. Extra provider-specific
-// fields are preserved in Extra.
-type RiskSignal struct {
-	Code     string `json:"code,omitempty"`
-	Severity string `json:"severity,omitempty"`
-	Detail   string `json:"detail,omitempty"`
-	// Extra holds the full raw signal object, since the API may attach
-	// additional fields beyond the three above.
-	Extra map[string]any `json:"-"`
-}
-
-// UnmarshalJSON keeps both the typed fields and the full raw object.
-func (r *RiskSignal) UnmarshalJSON(b []byte) error {
-	type alias RiskSignal
-	var a alias
-	if err := json.Unmarshal(b, &a); err != nil {
-		return err
-	}
-	*r = RiskSignal(a)
-	raw := map[string]any{}
-	if err := json.Unmarshal(b, &raw); err != nil {
-		return err
-	}
-	r.Extra = raw
-	return nil
-}
-
-// RiskPayload comes from GET /api/v1/users/:id/risk. Advisory only: these
-// signals never affect a score.
-type RiskPayload struct {
-	RiskLevel  string       `json:"riskLevel"`
-	RiskScore  float64      `json:"riskScore"`
-	Signals    []RiskSignal `json:"signals"`
-	Advisory   bool         `json:"advisory"`
-	ComputedAt string       `json:"computedAt"`
-	// AISummary is an optional advisory AI narration; nil unless the AI
-	// subsystem is enabled.
-	AISummary json.RawMessage `json:"aiSummary,omitempty"`
-}
-
-// UsageDay is one day of API consumption, by status class.
-type UsageDay struct {
-	Date        string `json:"date"`
-	Total       int    `json:"total"`
-	OK          int    `json:"ok"`
-	ClientError int    `json:"clientError"`
-	ServerError int    `json:"serverError"`
-}
-
-// UsageTotals is UsageDay without the date.
-type UsageTotals struct {
-	Total       int `json:"total"`
-	OK          int `json:"ok"`
-	ClientError int `json:"clientError"`
-	ServerError int `json:"serverError"`
-}
-
-// UsagePayload comes from GET /api/v1/usage, the calling platform's own
-// consumption vs. its tier limits.
-type UsagePayload struct {
-	Platform struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-		Tier string `json:"tier"`
-	} `json:"platform"`
-	RateLimitPerMin int `json:"rateLimitPerMin"`
-	Quota           struct {
-		Cap       *int   `json:"cap"`
-		Used      int    `json:"used"`
-		Remaining *int   `json:"remaining"`
-		ResetAt   string `json:"resetAt"`
-	} `json:"quota"`
-	// Window is the trailing-days window (Days) or an explicit range
-	// (From/To, inclusive ISO dates, clamped to counter retention),
-	// whichever was requested; the other fields are zero-valued.
-	Window struct {
-		Days          int    `json:"days"`
-		From          string `json:"from"`
-		To            string `json:"to"`
-		RequestedFrom string `json:"requestedFrom"`
-		RequestedTo   string `json:"requestedTo"`
-		Truncated     bool   `json:"truncated"`
-		RetentionDays int    `json:"retentionDays"`
-	} `json:"window"`
-	Days   []UsageDay  `json:"days"`
-	Totals UsageTotals `json:"totals"`
-}
-
-// ─── Activity log & own-event export ─────────────────────────────────────────
-
-// ActivityEntry is one row of the platform's own activity log
-// (GET /api/v1/activity).
-type ActivityEntry struct {
-	ID string `json:"id"`
-	// Action is the audit action, e.g. EVENT_CREATED, WEBHOOK_UPDATED.
-	Action string `json:"action"`
-	// Payload is the action's recorded detail, as written (always includes
-	// the calling platform's own platformId).
-	Payload   map[string]any `json:"payload"`
-	CreatedAt string         `json:"createdAt"`
-}
-
-// ActivityPayload is the cursor-paginated payload from GET /api/v1/activity
-// (newest first).
-type ActivityPayload struct {
-	Data       []ActivityEntry `json:"data"`
-	NextCursor *string         `json:"nextCursor"`
-}
-
-// ActivityQuery are the optional filters for GetActivity. From/To are ISO
-// timestamps or dates bounding the row's createdAt.
-type ActivityQuery struct {
-	Limit  *int
-	Cursor string
-	Action string
-	From   string
-	To     string
-}
-
-// ExportedEvent is one exported event (GET /api/v1/events/export), the
-// platform's own recorded fields, keyed by its own external user id.
-type ExportedEvent struct {
-	ID         string `json:"id"`
-	UserID     string `json:"userId"`
-	EventType  string `json:"eventType"`
-	StakeLevel string `json:"stakeLevel"`
-	IsVerified bool   `json:"isVerified"`
-	// AutoImported is a convenience view of metadata.autoImported == true.
-	AutoImported     bool           `json:"autoImported"`
-	TransactionValue *float64       `json:"transactionValue"`
-	DueDate          *string        `json:"dueDate"`
-	CompletedAt      *string        `json:"completedAt"`
-	DaysLate         *int           `json:"daysLate"`
-	CreatedAt        string         `json:"createdAt"`
-	Metadata         map[string]any `json:"metadata"`
-}
-
-// EventExportPayload is the cursor-paginated payload from
-// GET /api/v1/events/export (oldest first: ledger order).
-type EventExportPayload struct {
-	Data       []ExportedEvent `json:"data"`
-	NextCursor *string         `json:"nextCursor"`
-}
-
-// EventExportQuery are the optional filters for ExportEvents. From/To are ISO
-// timestamps or dates bounding the event's recorded createdAt.
-type EventExportQuery struct {
-	Limit  *int
-	Cursor string
-	From   string
-	To     string
-}
-
-// ─── Event ingestion ─────────────────────────────────────────────────────────
-
-// Event types accepted by POST /api/v1/events.
-const (
-	EventTransactionCompleted   = "TRANSACTION_COMPLETED"
-	EventContractFulfilled      = "CONTRACT_FULFILLED"
-	EventReviewVerified         = "REVIEW_VERIFIED"
-	EventDisputeResolvedForUser = "DISPUTE_RESOLVED_FOR_USER"
-	EventTransactionCancelled   = "TRANSACTION_CANCELLED"
-	EventContractCancelled      = "CONTRACT_CANCELLED"
-	EventContractBreached       = "CONTRACT_BREACHED"
-	EventTransactionDisputed    = "TRANSACTION_DISPUTED"
-)
-
-// Additional event types the read-only what-if projection accepts
-// (ProjectScore). The projection takes the FULL vocabulary: it writes nothing,
-// so the dispute outcomes the API produces itself are modellable too, as is
-// EventContractBreached above (the strongest negative signal in the formula).
-// A platform cannot report these two via ReportEvent.
-const (
-	EventDisputeFiled               = "DISPUTE_FILED"
-	EventDisputeResolvedAgainstUser = "DISPUTE_RESOLVED_AGAINST_USER"
-)
-
-// IngestEventTypes is every event type POST /api/v1/events accepts.
-var IngestEventTypes = []string{
-	EventTransactionCompleted,
-	EventContractFulfilled,
-	EventReviewVerified,
-	EventDisputeResolvedForUser,
-	EventTransactionCancelled,
-	EventContractCancelled,
-	EventContractBreached,
-	EventTransactionDisputed,
-}
-
-// ProjectionEventTypes is every event type ProjectScore accepts, a superset of
-// IngestEventTypes.
-var ProjectionEventTypes = []string{
-	EventTransactionCompleted,
-	EventTransactionDisputed,
-	EventTransactionCancelled,
-	EventReviewVerified,
-	EventContractFulfilled,
-	EventContractCancelled,
-	EventContractBreached,
-	EventDisputeFiled,
-	EventDisputeResolvedForUser,
-	EventDisputeResolvedAgainstUser,
-}
-
-// Stake levels.
-const (
-	StakeHigh   = "HIGH"
-	StakeMedium = "MEDIUM"
-	StakeLow    = "LOW"
-)
-
-// ReportEventInput is the body for ReportEvent / POST /api/v1/events.
-type ReportEventInput struct {
-	UserID           string         `json:"userId"`
-	EventType        string         `json:"eventType"`
-	DueDate          string         `json:"dueDate,omitempty"`
-	CompletedAt      string         `json:"completedAt,omitempty"`
-	StakeLevel       string         `json:"stakeLevel,omitempty"`
-	IsVerified       *bool          `json:"isVerified,omitempty"`
-	TransactionValue *float64       `json:"transactionValue,omitempty"`
-	Metadata         map[string]any `json:"metadata,omitempty"`
-}
-
-// BatchEventInput is one event in a batch (POST /api/v1/events/batch).
-type BatchEventInput struct {
-	ReportEventInput
-	// IdempotencyKey (8–255 chars) makes a replayed item a no-op that returns
-	// the original event id.
-	IdempotencyKey string `json:"idempotencyKey,omitempty"`
-}
-
-// ReportEventResult comes from POST /api/v1/events.
-type ReportEventResult struct {
-	Event   map[string]any `json:"event"`
-	UserID  string         `json:"userId"`
-	Dispute map[string]any `json:"dispute,omitempty"`
-}
-
-// BatchEventResultItem is one entry in a batch ingest result.
-type BatchEventResultItem struct {
-	Index   int    `json:"index"`
-	UserID  string `json:"userId"`
-	Status  string `json:"status"` // created | duplicate | failed
-	EventID string `json:"eventId,omitempty"`
-	Error   string `json:"error,omitempty"`
-}
-
-// BatchEventsResult comes from POST /api/v1/events/batch: partial success,
-// one entry per input event.
-type BatchEventsResult struct {
-	Total     int                    `json:"total"`
-	Created   int                    `json:"created"`
-	Duplicate int                    `json:"duplicate"`
-	Failed    int                    `json:"failed"`
-	Results   []BatchEventResultItem `json:"results"`
-}
-
-// ─── Share tokens / disputes ─────────────────────────────────────────────────
-
-// ShareTokenResult comes from POST /api/v1/users/:id/share-token.
-type ShareTokenResult struct {
-	Token        string `json:"token"`
-	VerifyURL    string `json:"verifyUrl"`
-	EmbedSnippet string `json:"embedSnippet"`
-	WidgetSrc    string `json:"widgetSrc"`
-}
-
-// Dispute outcomes accepted by ResolveDispute.
-const (
-	DisputeForUser     = "FOR_USER"
-	DisputeAgainstUser = "AGAINST_USER"
-)
-
-// DisputeResult comes from PATCH /api/v1/disputes/:id/resolve.
-type DisputeResult struct {
-	Dispute map[string]any `json:"dispute"`
-}
-
-// ─── Webhook management ──────────────────────────────────────────────────────
-
-// Trust events a webhook can subscribe to.
-const (
-	WebhookScoreUpdated      = "score.updated"
-	WebhookScoreBandChanged  = "score.band_changed"
-	WebhookDisputeResolved   = "dispute.resolved"
-	WebhookMonitorTriggered  = "monitor.triggered"
-	WebhookUsageQuotaWarning = "usage.quota_warning"
-)
-
-// CreateWebhookInput is the body for CreateWebhook.
-type CreateWebhookInput struct {
-	URL         string   `json:"url"`
-	Events      []string `json:"events"`
-	Description string   `json:"description,omitempty"`
-}
-
-// WebhookConfig is the public webhook projection (never includes the secret).
-type WebhookConfig struct {
-	ID             string   `json:"id"`
-	URL            string   `json:"url"`
-	Events         []string `json:"events"`
-	Description    *string  `json:"description"`
-	IsActive       bool     `json:"isActive"`
-	FailureCount   int      `json:"failureCount"`
-	DeliveredCount int      `json:"deliveredCount"`
-	LastStatus     *int     `json:"lastStatus"`
-	LastError      *string  `json:"lastError"`
-	LastDeliveryAt *string  `json:"lastDeliveryAt"`
-	DisabledAt     *string  `json:"disabledAt"`
+// ConfidenceClass and NotEstablished travel together, always. They are one fact
+// written twice so that neither can be read alone: a class with its gaps a
+// request away would be exactly the bare assertion the pairing exists to
+// prevent. Do not render one without the other.
+type ResolutionSummary struct {
+	ID              string `json:"id"`
+	InvestigationID string `json:"investigationId"`
+	// Reported is the report's own title, quoted. Never Credda's description of
+	// the defect.
+	Reported  string  `json:"reported"`
+	Reference *string `json:"reference"`
+	SignalID  *string `json:"signalId"`
+	// ReproductionStatus says whether the reported failure was actually
+	// observed to happen.
+	ReproductionStatus string `json:"reproductionStatus"`
+	// VerificationVerdict is nil when no verification run exists. Never a
+	// stand-in verdict: nil means nothing verified this, which is different
+	// from something verifying it and failing.
+	VerificationVerdict *string `json:"verificationVerdict"`
+	RegressionStatus    string  `json:"regressionStatus"`
+	ConfidenceClass     string  `json:"confidenceClass"`
+	// NotEstablished is what this record does NOT establish, in a reviewer's
+	// terms. Empty exactly when ConfidenceClass is ESTABLISHED.
+	NotEstablished []string `json:"notEstablished"`
 	CreatedAt      string   `json:"createdAt"`
 }
 
-// CreateWebhookResult carries the new webhook plus its signing secret, which
-// is shown ONCE. Store it to verify deliveries.
-type CreateWebhookResult struct {
-	Webhook WebhookConfig `json:"webhook"`
-	Secret  string        `json:"secret"`
-}
-
-// UpdateWebhookInput patches a webhook. Nil fields are omitted from the
-// request body.
-type UpdateWebhookInput struct {
-	URL         *string  `json:"url,omitempty"`
-	Events      []string `json:"events,omitempty"`
-	Description *string  `json:"description,omitempty"`
-	IsActive    *bool    `json:"isActive,omitempty"`
-}
-
-// WebhookTestResult comes from POST /api/v1/webhooks/:id/test.
-type WebhookTestResult struct {
-	Delivered  bool    `json:"delivered"`
-	StatusCode *int    `json:"statusCode"`
-	Error      *string `json:"error"`
-	DurationMs *int    `json:"durationMs"`
-}
-
-// WebhookDelivery is one recorded delivery attempt.
-type WebhookDelivery struct {
-	ID         string  `json:"id"`
-	WebhookID  string  `json:"webhookId"`
-	EventID    string  `json:"eventId"`
-	EventType  string  `json:"eventType"`
-	Success    bool    `json:"success"`
-	StatusCode *int    `json:"statusCode"`
-	Error      *string `json:"error"`
-	DurationMs *int    `json:"durationMs"`
-	CreatedAt  string  `json:"createdAt"`
-}
-
-// WebhookListResult is the envelope returned by ListWebhooks.
-type WebhookListResult struct {
-	Data []WebhookConfig `json:"data"`
-}
-
-// WebhookUpdateResult is the envelope returned by UpdateWebhook.
-type WebhookUpdateResult struct {
-	Webhook WebhookConfig `json:"webhook"`
-}
-
-// WebhookDeliveriesResult is the cursor-paginated envelope returned by
-// GetWebhookDeliveries.
-type WebhookDeliveriesResult struct {
-	Data       []WebhookDelivery `json:"data"`
-	NextCursor *string           `json:"nextCursor"`
-}
-
-// RecentWebhookEventDelivery is the delivery attempt that carried an event. It
-// is nil for catalog examples.
-type RecentWebhookEventDelivery struct {
-	ID          string `json:"id"`
-	WebhookID   string `json:"webhookId"`
-	Attempt     int    `json:"attempt"`
-	Success     bool   `json:"success"`
-	StatusCode  *int   `json:"statusCode"`
-	DeliveredAt string `json:"deliveredAt"`
-}
-
-// RecentWebhookEvent is one item from GET /api/v1/webhooks/deliveries: the
-// delivery envelope exactly as sent, plus provenance. IsExample is true for a
-// representative payload from the event catalog: sample data, NOT a delivery
-// that occurred. Never present an example as a real outcome.
-type RecentWebhookEvent struct {
-	// ID is the event id, stable across retries and replays. Dedupe on it.
-	ID        string                      `json:"id"`
-	Type      string                      `json:"type"`
-	Livemode  bool                        `json:"livemode"`
-	CreatedAt string                      `json:"createdAt"`
-	Data      json.RawMessage             `json:"data"`
-	IsExample bool                        `json:"isExample"`
-	Delivery  *RecentWebhookEventDelivery `json:"delivery"`
-}
-
-// RecentWebhookEventsResult is the cursor-paginated envelope returned by
-// GetRecentWebhookEvents. Source is "examples" when nothing has been delivered
-// yet and the event catalog was used as sample data.
-type RecentWebhookEventsResult struct {
-	Data       []RecentWebhookEvent `json:"data"`
-	NextCursor *string              `json:"nextCursor"`
-	Source     string               `json:"source"`
-}
-
-// ─── Score monitors (continuous monitoring) ──────────────────────────────────
-
-// ScoreMonitor is an edge-triggered threshold/band watch on one of your users.
-// UserID is the platform's own externalId. Monitors are notification config
-// only: a monitor never affects a score.
-type ScoreMonitor struct {
-	ID     string `json:"id"`
-	UserID string `json:"userId"`
-	// Fires when the score crosses DOWN through this threshold.
-	BelowScore *float64 `json:"belowScore"`
-	// Fires when the score crosses UP through this threshold.
-	AboveScore *float64 `json:"aboveScore"`
-	// Fires whenever the score band label changes.
-	OnBandChange    bool    `json:"onBandChange"`
-	IsActive        bool    `json:"isActive"`
-	LastTriggeredAt *string `json:"lastTriggeredAt"`
-	CreatedAt       string  `json:"createdAt"`
-	UpdatedAt       string  `json:"updatedAt"`
-}
-
-// CreateMonitorInput is the body for CreateMonitor: at least one condition
-// (BelowScore, AboveScore, or OnBandChange) is required.
-type CreateMonitorInput struct {
-	UserID       string   `json:"userId"`
-	BelowScore   *float64 `json:"belowScore,omitempty"`
-	AboveScore   *float64 `json:"aboveScore,omitempty"`
-	OnBandChange *bool    `json:"onBandChange,omitempty"`
-}
-
-// UpdateMonitorInput patches a monitor. Nil fields are omitted; to clear a
-// threshold send an explicit JSON null via a custom body, or deactivate and
-// recreate. The updated monitor must keep at least one condition.
-type UpdateMonitorInput struct {
-	BelowScore   *float64 `json:"belowScore,omitempty"`
-	AboveScore   *float64 `json:"aboveScore,omitempty"`
-	OnBandChange *bool    `json:"onBandChange,omitempty"`
-	IsActive     *bool    `json:"isActive,omitempty"`
-}
-
-// MonitorResult is the envelope returned by CreateMonitor / GetMonitor /
-// UpdateMonitor.
-type MonitorResult struct {
-	Monitor ScoreMonitor `json:"monitor"`
-}
-
-// MonitorListResult is the cursor-paginated envelope returned by ListMonitors.
-type MonitorListResult struct {
-	Data       []ScoreMonitor `json:"data"`
-	NextCursor *string        `json:"nextCursor"`
-}
-
-// ─── Bulk screenings (async batch score reads) ───────────────────────────────
-
-// ScreeningJob is one screening job's status + summary (results are fetched
-// separately via GetScreeningResults). Status is one of QUEUED, RUNNING,
-// COMPLETED, FAILED.
-type ScreeningJob struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	// Deduped ids submitted.
-	TotalCount int `json:"totalCount"`
-	// Ids that resolved to a known user. Nil until processed.
-	FoundCount  *int    `json:"foundCount"`
-	Error       *string `json:"error"`
-	CreatedAt   string  `json:"createdAt"`
-	StartedAt   *string `json:"startedAt"`
-	CompletedAt *string `json:"completedAt"`
-}
-
-// ScreeningResultItem is one screened user. Score fields are non-nil only
-// when Found is true.
-type ScreeningResultItem struct {
-	ExternalID string   `json:"externalId"`
-	Found      bool     `json:"found"`
-	Score      *float64 `json:"score,omitempty"`
-	Band       *string  `json:"band,omitempty"`
-	Confidence *float64 `json:"confidence,omitempty"`
-	ComputedAt *string  `json:"computedAt,omitempty"`
-}
-
-// ScreeningResult is the envelope returned by CreateScreening / GetScreening.
-type ScreeningResult struct {
-	Screening ScreeningJob `json:"screening"`
-}
-
-// ScreeningListResult is the cursor-paginated envelope returned by
-// ListScreenings.
-type ScreeningListResult struct {
-	Data       []ScreeningJob `json:"data"`
-	NextCursor *string        `json:"nextCursor"`
-}
-
-// ScreeningResultsResult is the envelope returned by GetScreeningResults.
-type ScreeningResultsResult struct {
-	Screening ScreeningJob          `json:"screening"`
-	Results   []ScreeningResultItem `json:"results"`
-	Count     int                   `json:"count"`
-}
-
-// ─── Data ingress: field mapping + historical CSV import ─────────────────────
+// Resolution is the whole record of what one run established.
 //
-// A mapping is DECLARATIVE DATA, never code: a rule may read a dot-path,
-// supply a constant, look a value up in your own table, or apply one of a
-// fixed transform whitelist. There is no expression language, by design.
-
-// Transform names accepted by a MappingFieldRule.
-const (
-	TransformCentsToUnits = "cents_to_units"
-	TransformISODate      = "iso_date"
-	TransformLowercase    = "lowercase"
-	TransformTrim         = "trim"
-	TransformBoolean      = "boolean"
-)
-
-// MappingFieldRule is the object form of a field rule. A bare dot-path string
-// is also accepted on the wire. Use MappingPath for that shorthand.
-// Transform holds a single transform name or a []string of them, applied
-// left-to-right BEFORE the Values lookup.
-type MappingFieldRule struct {
-	Path      string         `json:"path,omitempty"`
-	Const     any            `json:"const,omitempty"`
-	Values    map[string]any `json:"values,omitempty"`
-	Default   any            `json:"default,omitempty"`
-	Transform any            `json:"transform,omitempty"`
+// RootCause, Fix and Verification are nil exactly when the run produced no such
+// row, and the hole is named in Confidence.NotEstablished rather than filled
+// in. Read the gaps.
+type Resolution struct {
+	ID                   string               `json:"id"`
+	InvestigationID      string               `json:"investigationId"`
+	Bug                  ResolutionBug        `json:"bug"`
+	Evidence             []ResolutionCitation `json:"evidence"`
+	Reproduction         ResolutionRepro      `json:"reproduction"`
+	RootCause            *ResolutionCause     `json:"rootCause"`
+	Fix                  *ResolutionFix       `json:"fix"`
+	Verification         *ResolutionVerify    `json:"verification"`
+	RegressionProtection ResolutionRegression `json:"regressionProtection"`
+	Confidence           ResolutionConfidence `json:"confidence"`
+	CreatedAt            string               `json:"createdAt"`
 }
 
-// MappingPath is the dot-path shorthand for a field rule (marshals to a bare
-// JSON string, exactly like the object form with only Path set).
-type MappingPath string
-
-// IngestMapping declares how to reach Credda's event fields from YOUR record
-// shape. Keys are Credda fields (userId, eventType, dueDate, completedAt,
-// stakeLevel, isVerified, transactionValue, metadata, idempotencyKey) plus
-// verifiedBy, the counterparty/witness identifier that licenses
-// isVerified: true. Without it a record still ingests, with isVerified false
-// and a warning. Values are a MappingPath or a MappingFieldRule.
-type IngestMapping map[string]any
-
-// IngestResultItem is one record's outcome. Records fail INDIVIDUALLY: a bad
-// record never fails the rest. Status is one of created, duplicate, failed.
-type IngestResultItem struct {
-	Index   int    `json:"index"`
-	UserID  string `json:"userId,omitempty"`
-	Status  string `json:"status"`
-	EventID string `json:"eventId,omitempty"`
-	Error   string `json:"error,omitempty"`
-	// Non-fatal notes: most commonly an isVerified downgrade.
-	Warnings []string `json:"warnings,omitempty"`
+// ResolutionBug is what was reported, and where.
+type ResolutionBug struct {
+	Reported  string  `json:"reported"`
+	Reference *string `json:"reference"`
+	SignalID  *string `json:"signalId"`
+	// AffectedFiles are the files the supporting evidence's own signatures
+	// named — not a guess about where the bug lives.
+	AffectedFiles []string `json:"affectedFiles"`
 }
 
-// IngestResult is the envelope returned by Ingest.
-type IngestResult struct {
-	Total     int                `json:"total"`
-	Created   int                `json:"created"`
-	Duplicate int                `json:"duplicate"`
-	Failed    int                `json:"failed"`
-	Results   []IngestResultItem `json:"results"`
+// ResolutionCitation is an evidence pointer on a resolution: enough to identify
+// the record, not the record itself.
+type ResolutionCitation struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Summary string `json:"summary"`
 }
 
-// StoredMapping is a saved, reusable mapping.
-type StoredMapping struct {
-	ID          string        `json:"id"`
-	Name        string        `json:"name"`
-	Description *string       `json:"description"`
-	Mapping     IngestMapping `json:"mapping"`
-	CreatedAt   string        `json:"createdAt"`
-	UpdatedAt   string        `json:"updatedAt"`
-}
-
-// MappingResult is the envelope returned by CreateMapping / GetMapping.
-type MappingResult struct {
-	Mapping StoredMapping `json:"mapping"`
-}
-
-// MappingListResult is the cursor-paginated envelope from ListMappings.
-type MappingListResult struct {
-	Data       []StoredMapping `json:"data"`
-	NextCursor *string         `json:"nextCursor"`
-}
-
-// ImportJob is one historical CSV import (status + counts). Status is one of
-// QUEUED, RUNNING, COMPLETED, FAILED.
-type ImportJob struct {
-	ID     string `json:"id"`
+// ResolutionRepro is whether the reported failure was made to happen, and what
+// made it happen.
+type ResolutionRepro struct {
 	Status string `json:"status"`
-	// Data rows in the file (never truncated: an over-cap file is refused).
-	TotalRows    int `json:"totalRows"`
-	CreatedCount int `json:"createdCount"`
-	// Rows already present under their idempotency key (a safe re-upload).
-	SkippedCount int `json:"skippedCount"`
-	// Authoritative even when the stored error list is capped.
-	FailedCount int     `json:"failedCount"`
-	Error       *string `json:"error"`
-	CreatedAt   string  `json:"createdAt"`
-	StartedAt   *string `json:"startedAt"`
-	CompletedAt *string `json:"completedAt"`
+	// Command is read off the signature, so it is never a command that was not
+	// the one that produced the capture.
+	Command    *string           `json:"command"`
+	Signature  *FailureSignature `json:"signature"`
+	EvidenceID *string           `json:"evidenceId"`
+	// TimedOutAttempts is nil, not 0, on a record written before the column
+	// existed. Nil means "this record does not say"; 0 means "nothing was
+	// killed". They are different answers.
+	TimedOutAttempts *int `json:"timedOutAttempts"`
 }
 
-// ImportResult is the envelope returned by CreateImport / GetImport.
-type ImportResult struct {
-	Import ImportJob `json:"import"`
+// ResolutionCause is the cause the run established, and the evidence for it.
+type ResolutionCause struct {
+	HypothesisID          string   `json:"hypothesisId"`
+	Description           string   `json:"description"`
+	SupportingEvidenceIDs []string `json:"supportingEvidenceIds"`
+	AnchoredFiles         []string `json:"anchoredFiles"`
 }
 
-// ImportListResult is the cursor-paginated envelope from ListImports.
-type ImportListResult struct {
-	Data       []ImportJob `json:"data"`
-	NextCursor *string     `json:"nextCursor"`
+// ResolutionFix is the patch the run wrote. Nil on the parent when no patch was
+// produced.
+type ResolutionFix struct {
+	PatchID      string   `json:"patchId"`
+	Attempt      int      `json:"attempt"`
+	FilesChanged []string `json:"filesChanged"`
+	Insertions   int      `json:"insertions"`
+	Deletions    int      `json:"deletions"`
+	Rationale    string   `json:"rationale"`
 }
 
-// ImportRowError is one rejected row. Row is 1-based over DATA rows (the
-// header is excluded), so it lines up with a spreadsheet minus one.
-type ImportRowError struct {
-	Row    int    `json:"row"`
-	Error  string `json:"error"`
-	UserID string `json:"userId,omitempty"`
+// ResolutionVerify is the executed proof of the fix.
+type ResolutionVerify struct {
+	VerificationRunID string              `json:"verificationRunId"`
+	Verdict           string              `json:"verdict"`
+	Signals           VerificationSignals `json:"signals"`
+	EvidenceIDs       []string            `json:"evidenceIds"`
 }
 
-// ImportRowWarning is one non-fatal per-row note (e.g. an isVerified
-// downgrade). The row was still imported.
-type ImportRowWarning struct {
-	Row     int    `json:"row"`
-	Warning string `json:"warning"`
-	UserID  string `json:"userId,omitempty"`
+// ResolutionRegression is the test that proves the fix: Before and After are
+// the same test run on either side of the patch. FAIL then PASS is the pair a
+// reviewer is looking for, and it is what tells a fixed failure from a mutated
+// one.
+type ResolutionRegression struct {
+	Status string `json:"status"`
+	Before string `json:"before"`
+	After  string `json:"after"`
 }
 
-// ImportErrorsResult is the envelope returned by GetImportErrors.
-type ImportErrorsResult struct {
-	Import       ImportJob          `json:"import"`
-	Errors       []ImportRowError   `json:"errors"`
-	ErrorCount   int                `json:"errorCount"`
-	Warnings     []ImportRowWarning `json:"warnings"`
-	WarningCount int                `json:"warningCount"`
-	// True when more rows failed than the stored list retains.
-	Truncated bool `json:"truncated"`
+// ResolutionConfidence is the class and the gaps, together. There is no numeric
+// member here by design: see ResolutionConfidenceClasses.
+type ResolutionConfidence struct {
+	Class string `json:"class"`
+	// NotEstablished is empty exactly when Class is ESTABLISHED.
+	NotEstablished []string `json:"notEstablished"`
 }
 
-// ─── Agent subjects + delivery receipts ──────────────────────────────────────
-
-// AgentDeclaration holds caller-declared facts about an agent. Claims, never
-// evidence, and never a scoring input.
-type AgentDeclaration struct {
-	OperatorName     string `json:"operatorName,omitempty"`
-	OperatorHomepage string `json:"operatorHomepage,omitempty"`
-	OperatorDid      string `json:"operatorDid,omitempty"`
-	ModelFamily      string `json:"modelFamily,omitempty"`
-	Description      string `json:"description,omitempty"`
-	RegisteredBy     string `json:"registeredByPlatformId,omitempty"`
-	RegisteredAt     string `json:"registeredAt,omitempty"`
-	// OperatorIsRegisteredPlatform is true when the declared operator is an
-	// identifiable Credda platform.
-	OperatorIsRegisteredPlatform bool `json:"operatorIsRegisteredPlatform"`
+// ResolutionList is the ListResolutions response.
+type ResolutionList struct {
+	Resolutions []ResolutionSummary `json:"resolutions"`
+	Total       int                 `json:"total"`
 }
 
-// AgentOperatorInput names the party that operates an agent.
-type AgentOperatorInput struct {
-	Name     string `json:"name,omitempty"`
-	Homepage string `json:"homepage,omitempty"`
-	Did      string `json:"did,omitempty"` // e.g. did:web:acme.ai
+// ── validations ─────────────────────────────────────────────────────────────
+
+// ValidationSummary is one row of ListValidations, the review queue.
+//
+// EnvironmentStatus is on the row deliberately: a run that ended BLOCKED must
+// read as blocked in the queue, not as a failure of the change.
+type ValidationSummary struct {
+	ID           string `json:"id"`
+	RepositoryID string `json:"repositoryId"`
+	// RepositorySource is nil only when the repository row is gone; never a
+	// stand-in label. Reduced to `local:<name>` for a local checkout, as on
+	// Repository.Source.
+	RepositorySource *string `json:"repositorySource"`
+	SourceType       string  `json:"sourceType"`
+	SourceRef        string  `json:"sourceRef"`
+	BaseCommit       *string `json:"baseCommit"`
+	HeadCommit       *string `json:"headCommit"`
+	State            string  `json:"state"`
+	Outcome          *string `json:"outcome"`
+	TriggerKind      string  `json:"triggerKind"`
+	// EnvironmentStatus and EnvironmentFailureKind say whether the environment
+	// came up. An environment failure is not a product failure.
+	EnvironmentStatus      string  `json:"environmentStatus"`
+	EnvironmentFailureKind *string `json:"environmentFailureKind"`
+	// ExecutableFilesChanged is nil when the change was never analysed. Zero
+	// means it was analysed and touched nothing executable, which is the
+	// NO_CHANGE_REQUIRED outcome and a success.
+	ExecutableFilesChanged *int    `json:"executableFilesChanged"`
+	StartedAt              *string `json:"startedAt"`
+	CompletedAt            *string `json:"completedAt"`
+	CreatedAt              string  `json:"createdAt"`
+	DurationMs             *int64  `json:"durationMs"`
 }
 
-// RegisterAgentInput is the body of POST /api/v1/agents.
-type RegisterAgentInput struct {
-	UserID string `json:"userId"`
-	// OperatedByReportingPlatform nil means the server default (true, the
-	// conservative reading, under which your own reports are never confirmed
-	// evidence for this agent).
-	OperatedByReportingPlatform *bool `json:"operatedByReportingPlatform,omitempty"`
-	// Operator must name a third-party operator when
-	// OperatedByReportingPlatform is explicitly false.
-	Operator    *AgentOperatorInput `json:"operator,omitempty"`
-	ModelFamily string              `json:"modelFamily,omitempty"`
-	Description string              `json:"description,omitempty"`
+// Validation is the full record of one validation run.
+type Validation struct {
+	ID           string  `json:"id"`
+	OrgID        string  `json:"orgId"`
+	RepositoryID string  `json:"repositoryId"`
+	SourceType   string  `json:"sourceType"`
+	SourceRef    string  `json:"sourceRef"`
+	BaseCommit   *string `json:"baseCommit"`
+	HeadCommit   *string `json:"headCommit"`
+	State        string  `json:"state"`
+	Outcome      *string `json:"outcome"`
+	TriggerKind  string  `json:"triggerKind"`
+	TriggeredBy  *string `json:"triggeredBy"`
+	// IntentSummary is what the engine understood the change to be trying to
+	// do. Nil before the UNDERSTANDING_INTENT phase runs.
+	IntentSummary          *string `json:"intentSummary"`
+	ExecutableFilesChanged *int    `json:"executableFilesChanged"`
+	StartedAt              *string `json:"startedAt"`
+	CompletedAt            *string `json:"completedAt"`
+	Error                  *string `json:"error"`
+	CreatedAt              string  `json:"createdAt"`
+	UpdatedAt              string  `json:"updatedAt"`
+	DurationMs             *int64  `json:"durationMs"`
 }
 
-// AgentSubject is the result of registering an agent.
-type AgentSubject struct {
-	UserID      string           `json:"userId"`
-	SubjectType string           `json:"subjectType"`
-	Agent       AgentDeclaration `json:"agent"`
-	CreatedAt   string           `json:"createdAt"`
-	// SelfDealingRule states, in plain language, the rule just opted into.
-	SelfDealingRule string `json:"selfDealingRule,omitempty"`
+// Environment is whether the run's environment came up, and what was attempted.
+//
+// Detail is what was tried — runtime, package manager, commands, the stderr of
+// the install that failed — passed through as the engine recorded it rather
+// than summarised, because a BLOCKED report whose reason has been summarised
+// away is the report nobody can act on. Its keys are the engine's, and no field
+// of it is an API contract.
+type Environment struct {
+	Status      string          `json:"status"`
+	FailureKind *string         `json:"failureKind"`
+	Detail      json.RawMessage `json:"detail"`
 }
 
-// DeliveryRecord tallies delivery outcomes from the append-only ledger, split by
-// whether an independent counterparty was on the other side.
-type DeliveryRecord struct {
-	Deliveries int `json:"deliveries"`
-	// ConfirmedDeliveries counts only outcomes a DISTINCT counterparty
-	// attested, the only ones that are evidence.
-	ConfirmedDeliveries   int `json:"confirmedDeliveries"`
-	UnconfirmedDeliveries int `json:"unconfirmedDeliveries"`
-	// SelfAttestedDeliveries were reported by the agent's own declared
-	// operator, and are never confirmed evidence.
-	SelfAttestedDeliveries int `json:"selfAttestedDeliveries"`
-	Failures               int `json:"failures"`
-	Disputes               int `json:"disputes"`
-	// OnTimeConfirmedDeliveries and OnTimeRate are nil when nothing is
-	// confirmed yet: an absent rate is not a perfect one.
-	OnTimeConfirmedDeliveries *int     `json:"onTimeConfirmedDeliveries"`
-	OnTimeRate                *float64 `json:"onTimeRate"`
-	FirstRecordedAt           *string  `json:"firstRecordedAt"`
-	LastRecordedAt            *string  `json:"lastRecordedAt"`
+// ValidationDetail is the GetValidation response.
+//
+// CheckCount is on the detail rather than a page away for a reason: a completed
+// run with zero checks is the false success this product exists to prevent, and
+// a caller must be able to see it without a second request.
+type ValidationDetail struct {
+	Validation  Validation  `json:"validation"`
+	Environment Environment `json:"environment"`
+	// ChangeImpact is the engine's analysis of what the change touches, as it
+	// recorded it. No field of it is an API contract.
+	ChangeImpact   json.RawMessage `json:"changeImpact"`
+	CheckCount     int             `json:"checkCount"`
+	FindingCount   int             `json:"findingCount"`
+	EvidenceCount  int             `json:"evidenceCount"`
+	LatestSequence int             `json:"latestSequence"`
 }
 
-// DeliveryRecordDisclaimer states what a delivery record is, and what it is not.
-type DeliveryRecordDisclaimer struct {
-	IsA             string   `json:"isA"`
-	IsNot           []string `json:"isNot"`
-	SelfDealingRule string   `json:"selfDealingRule"`
+// ValidationCheck is one entry of the plan: what was checked, why, and how it
+// went.
+//
+// BaseStatus is the whole product on one field. A check that FAILED is re-run
+// against the base commit before it may become a finding; BaseStatus PASSED
+// there means this change caused the failure, and that is the difference
+// between "this change broke it" and "it was already broken". It is never
+// omitted.
+type ValidationCheck struct {
+	ID           string `json:"id"`
+	ValidationID string `json:"validationId"`
+	Sequence     int    `json:"sequence"`
+	Name         string `json:"name"`
+	Category     string `json:"category"`
+	Method       string `json:"method"`
+	// Reason is why this check exists, so the plan can be read rather than
+	// trusted.
+	Reason           string  `json:"reason"`
+	Target           *string `json:"target"`
+	ExpectedBehavior *string `json:"expectedBehavior"`
+	// RequirementSource is where the expected behaviour was read from.
+	RequirementSource *string `json:"requirementSource"`
+	Status            string  `json:"status"`
+	BaseStatus        *string `json:"baseStatus"`
+	// InvestigationID links a check that was escalated into a full
+	// investigation.
+	InvestigationID *string         `json:"investigationId"`
+	StartedAt       *string         `json:"startedAt"`
+	CompletedAt     *string         `json:"completedAt"`
+	Detail          json.RawMessage `json:"detail"`
+	CreatedAt       string          `json:"createdAt"`
+	DurationMs      *int64          `json:"durationMs"`
 }
 
-// AgentScore is the subject's current deterministic score, the identical
-// formula every subject runs through.
-// FinalScore and ScoreBand are POINTERS because a subject may have no computed
-// score yet. They are nil in that case, never a placeholder. Decoding them as
-// float64/string would turn a JSON null into 0/"", i.e. a score of zero.
-type AgentScore struct {
-	FinalScore     *float64 `json:"finalScore"`
-	ScoreBand      *string  `json:"scoreBand"`
-	Confidence     float64  `json:"confidence"`
-	FormulaVersion string   `json:"formulaVersion"`
-	ComputedAt     string   `json:"computedAt"`
-	ScoreFrozen    bool     `json:"scoreFrozen"`
+// Finding is something the validation concluded was wrong.
+//
+// There is no Evidence list here, deliberately: the findings table holds no
+// evidence references, and the evidence a finding rests on is reached through
+// its CheckID. An empty list here would put nothing where a reader expects
+// proof.
+type Finding struct {
+	ID           string `json:"id"`
+	ValidationID string `json:"validationId"`
+	// CheckID is the check that produced this. It is the route to the evidence.
+	CheckID  *string `json:"checkId"`
+	Title    string  `json:"title"`
+	Severity string  `json:"severity"`
+	// Confidence is an ordinal label, not a percentage.
+	Confidence       string  `json:"confidence"`
+	Status           string  `json:"status"`
+	ExpectedBehavior *string `json:"expectedBehavior"`
+	ObservedBehavior *string `json:"observedBehavior"`
+	// Reproduction is how to make it happen again.
+	Reproduction *string `json:"reproduction"`
+	AffectedArea *string `json:"affectedArea"`
+	// LikelySource is where the engine believes this comes from. "Likely" is
+	// the word the engine uses; it is not an established cause.
+	LikelySource *string `json:"likelySource"`
+	CreatedAt    string  `json:"createdAt"`
+	UpdatedAt    string  `json:"updatedAt"`
 }
 
-// AgentDetail is GET /api/v1/agents/:id.
-type AgentDetail struct {
-	UserID         string                    `json:"userId"`
-	SubjectType    string                    `json:"subjectType"`
-	Agent          AgentDeclaration          `json:"agent"`
-	CreatedAt      string                    `json:"createdAt"`
-	Score          *AgentScore               `json:"score"`
-	DeliveryRecord *DeliveryRecord           `json:"deliveryRecord"`
-	Disclaimer     *DeliveryRecordDisclaimer `json:"disclaimer"`
+// ValidationEvent is one entry on a validation's timeline. Separate from Event
+// because validation_events and investigation_events are different tables with
+// different columns.
+type ValidationEvent struct {
+	ID           string  `json:"id"`
+	ValidationID string  `json:"validationId"`
+	CheckID      *string `json:"checkId"`
+	Sequence     int     `json:"sequence"`
+	Type         string  `json:"type"`
+	Severity     string  `json:"severity"`
+	Summary      string  `json:"summary"`
+	State        *string `json:"state"`
+	// Data is the engine's payload for this event. No field of it is an API
+	// contract.
+	Data      json.RawMessage `json:"data"`
+	CreatedAt string          `json:"createdAt"`
 }
 
-// DeliveryReceipts is GET /api/v1/verify/:token/delivery-receipts.
-type DeliveryReceipts struct {
-	Token          string                   `json:"token"`
-	SubjectType    string                   `json:"subjectType"`
-	Agent          *AgentDeclaration        `json:"agent"`
-	DeliveryRecord DeliveryRecord           `json:"deliveryRecord"`
-	Score          AgentScore               `json:"score"`
-	Disclaimer     DeliveryRecordDisclaimer `json:"disclaimer"`
-	// CredentialVc is a signed W3C Verifiable Credential (VC-JWT) of the record.
-	CredentialVc  string `json:"credentialVc"`
-	Format        string `json:"format"`
-	Issuer        string `json:"issuer"`
-	Kid           string `json:"kid"`
-	Scope         string `json:"scope"`
-	IssuedAt      string `json:"issuedAt"`
-	ExpiresAt     string `json:"expiresAt"`
-	DidDocument   string `json:"didDocument"`
-	TrustRegistry string `json:"trustRegistry"`
+// ValidationList is the ListValidations response.
+type ValidationList struct {
+	Validations []ValidationSummary `json:"validations"`
+	Total       int                 `json:"total"`
+}
+
+// CheckPage is the ValidationChecks response. Total is the size of the whole
+// plan, so a caller can tell it holds only part of it.
+type CheckPage struct {
+	Checks []ValidationCheck `json:"checks"`
+	Total  int               `json:"total"`
+}
+
+// FindingPage is the ValidationFindings response.
+type FindingPage struct {
+	Findings []Finding `json:"findings"`
+	Total    int       `json:"total"`
+}
+
+// ValidationEventPage is the ValidationEvents response. Same cursor semantics
+// as EventPage.
+type ValidationEventPage struct {
+	Events         []ValidationEvent `json:"events"`
+	LatestSequence int               `json:"latestSequence"`
+	NextSince      int               `json:"nextSince"`
+	HasMore        bool              `json:"hasMore"`
+}
+
+// ── organization ────────────────────────────────────────────────────────────
+
+// Organization is the workspace an API key speaks for.
+type Organization struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Slug      string `json:"slug"`
+	CreatedAt string `json:"createdAt"`
+}
+
+// OrganizationDetail is the GetOrganization response: the organisation and what
+// it holds.
+//
+// Every count is a count over one scoped table. Investigations and validations
+// are counted separately because they are different runs, and a sum of them is
+// a number nobody can take apart again. There is no plan, seat allowance or
+// spend record here because the engine's schema holds none.
+type OrganizationDetail struct {
+	Organization Organization `json:"organization"`
+	MemberCount  int          `json:"memberCount"`
+	// APIKeyCount counts only keys that can actually authenticate. Revoked ones
+	// are counted apart, because a revoked key is refused at the door and
+	// including it would claim more credentials reach this organisation than
+	// the server will accept.
+	APIKeyCount        int `json:"apiKeyCount"`
+	RevokedAPIKeyCount int `json:"revokedApiKeyCount"`
+	RepositoryCount    int `json:"repositoryCount"`
+	InvestigationCount int `json:"investigationCount"`
+	ValidationCount    int `json:"validationCount"`
+}
+
+// Avatar is derived from the member row, never fetched. The API picks a colour
+// BUCKET, not a colour: a client with N swatches takes ColorIndex % N. Kind is
+// always "INITIALS" today.
+type Avatar struct {
+	Kind string `json:"kind"`
+	// Initials is one or two characters, never empty.
+	Initials string `json:"initials"`
+	// ColorIndex is stable per user, in 0..7.
+	ColorIndex int `json:"colorIndex"`
+}
+
+// OrganizationMember is one membership row.
+//
+// Role and RoleEnforced travel as a pair, and RoleEnforced is false. The reason
+// is structural: api_keys has an org_id and no user_id, so an authenticated
+// request identifies an organisation and never a person, and there is no member
+// on the request for a role to be looked up for. Serving the label is still
+// worth doing — "the operator wrote OWNER next to this person" is true — but a
+// Role column rendered without RoleEnforced is a rendered access model, and
+// this product has none. Do not render one without the other.
+type OrganizationMember struct {
+	UserID string  `json:"userId"`
+	Email  string  `json:"email"`
+	Name   *string `json:"name"`
+	Avatar Avatar  `json:"avatar"`
+	Role   string  `json:"role"`
+	// RoleEnforced is false. Read the doc comment on this type.
+	RoleEnforced bool   `json:"roleEnforced"`
+	JoinedAt     string `json:"joinedAt"`
+}
+
+// MemberPage is the OrganizationMembers response.
+//
+// Total is the number of membership ROWS, which is not the same claim as the
+// number of people with access: nothing in the engine writes users or
+// organization_members, so on an install where those rows were never created
+// this is an empty list next to a working API key. Render that as "no member
+// records exist", never as "you are alone in here".
+type MemberPage struct {
+	Members []OrganizationMember `json:"members"`
+	Total   int                  `json:"total"`
+}
+
+// APIKey is a key that can reach this organisation. Revoked keys are included,
+// because "this key was revoked on the 3rd" is the answer an operator came for.
+//
+// Nothing here is secret and nothing is omitted: api_keys stores a SHA-256 of
+// the secret half and nothing else, so there is no field from which a token
+// could be rebuilt. ID is the public half by design.
+type APIKey struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"createdAt"`
+	// LastUsedAt is COARSE by design: written at most once a minute per key. It
+	// answers "is this key still in use", not "when was the last request". Nil
+	// when the key has never been used.
+	LastUsedAt *string `json:"lastUsedAt"`
+	// RevokedAt non-nil means the key is refused. Verification stops at this
+	// field, and an open event stream is cut within a second of it being set.
+	RevokedAt *string `json:"revokedAt"`
+}
+
+// APIKeyPage is the OrganizationKeys response.
+type APIKeyPage struct {
+	Keys  []APIKey `json:"keys"`
+	Total int      `json:"total"`
+}
+
+// ── health ──────────────────────────────────────────────────────────────────
+
+// ReadinessCheck is one thing that was checked, and how.
+//
+// Status is "ok", "failed", or "unknown". "unknown" is NOT a softer "failed":
+// it means the check could not be run at all, which is still not evidence of
+// readiness. A probe that reports healthy because it had nothing to look at is
+// the same class of claim as a verdict with no evidence.
+type ReadinessCheck struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Detail string `json:"detail"`
+}
+
+// Readiness is the GetHealth response.
+//
+// Every claim in it is established by performing the thing it claims: the
+// database is queried, the schema version is read and compared, and the
+// artifact store is checked by writing and removing a probe file. Status is
+// "ok" or "degraded"; a degraded readiness arrives as an APIError with status
+// 503, so a caller that gets a Readiness back without an error is ready.
+type Readiness struct {
+	Status string `json:"status"`
+	// SchemaVersion is nil when the version could not be read at all.
+	SchemaVersion *int `json:"schemaVersion"`
+	// ExpectedSchemaVersion is the version this engine BUILD's migrations
+	// produce. A mismatch with SchemaVersion is the migrations check failing.
+	ExpectedSchemaVersion int              `json:"expectedSchemaVersion"`
+	Checks                []ReadinessCheck `json:"checks"`
 }
