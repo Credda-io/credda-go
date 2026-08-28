@@ -1,12 +1,38 @@
-// Package credda is the official Go client for the Credda Reliability Score API.
+// Package credda is the official Go client for the Credda engine API.
 //
-// Two access models, matching the API (and the TypeScript SDK, @credda/js):
+// Credda finds defects and security vulnerabilities in a company's production
+// and QA environments, reproduces the failure, diagnoses the cause, writes the
+// patch, proves it with a test that fails before and passes after, and opens a
+// pull request. It proposes; it never merges.
 //
-//   - Public: ResolveToken / GetTrustExport / GetDIDDocument / GetTrustRegistry
-//     hit public endpoints and need no API key.
-//   - Platform: everything else sends a platform API key as a Bearer token.
-//     These are for SERVER-SIDE use only; never ship a `crd_live_…` key to an
-//     untrusted client.
+// This package is a typed reader over that engine's HTTP API. Every method here
+// corresponds to a route mounted in the engine (apps/api/src/app.ts) and every
+// field to a value written by its serializers (apps/api/src/serialize.ts).
+// Nothing else is here: if the engine does not serve it, this client does not
+// name it.
+//
+// # What this client can do
+//
+// The surface is read-mostly, because the API is. There is exactly one write:
+// CreateInvestigation, which enqueues an investigation in state CREATED.
+// Execution is driven by the engine's worker, not by the API, so there is no
+// method here that starts, cancels, or advances a run, and none that creates a
+// validation, a patch, or a pull request. Those are the worker's, and the API
+// exposes no route for them.
+//
+// # Authentication
+//
+// A deployment sets CREDDA_AUTH to "enforced" or "disabled" (apps/api/src/auth.ts).
+// When enforced, every /api route requires an organisation's API key as an
+// RFC 6750 bearer token; pass it with WithAPIKey. When disabled, requests carry
+// no organisation, and the /api/organization routes answer 404 NO_ORGANIZATION
+// for that reason rather than guessing one. GET /livez needs no credential in
+// either mode and discloses nothing.
+//
+// # Stability
+//
+// See the versioning section of the README. This module is pre-1.0 and the tags
+// before v0.4.0 describe a different, retired product.
 //
 // The zero value of Client is not usable. Construct one with NewClient.
 package credda
@@ -25,12 +51,15 @@ import (
 	"time"
 )
 
-// DefaultBaseURL is the production Credda API root.
-const DefaultBaseURL = "https://api.credda.io"
+// DefaultBaseURL is the engine's default local address. There is no hosted
+// default: Credda runs against a customer's own deployment, so a base URL is
+// something a caller supplies with WithBaseURL rather than something this
+// package knows.
+const DefaultBaseURL = "http://localhost:3001"
 
-// apiPrefix is prepended to every versioned API path. The /.well-known/*
-// discovery documents live outside it (see getWellKnown).
-const apiPrefix = "/api/v1"
+// apiPrefix is prepended to every /api route. /livez is mounted outside it,
+// ahead of the auth gate (apps/api/src/app.ts).
+const apiPrefix = "/api"
 
 // Client is a Credda API client. It is safe for concurrent use by multiple
 // goroutines.
@@ -46,14 +75,17 @@ type Client struct {
 // Option configures a Client. Pass options to NewClient.
 type Option func(*Client)
 
-// WithAPIKey sets the platform API key sent as `Authorization: Bearer …` on
-// every request that requires one.
+// WithAPIKey sets the organisation API key sent as `Authorization: Bearer …`.
+//
+// The key names an organisation, never a person: api_keys has an org_id and no
+// user_id, which is why every scoped read is scoped by organisation and why
+// OrganizationMember.RoleEnforced is false. Keys are minted out of band by the
+// operator; the API has no route that creates or revokes one.
 func WithAPIKey(key string) Option {
 	return func(c *Client) { c.apiKey = key }
 }
 
-// WithBaseURL overrides the API root (default DefaultBaseURL). Trailing
-// slashes are trimmed.
+// WithBaseURL sets the engine's API root. Trailing slashes are trimmed.
 func WithBaseURL(base string) Option {
 	return func(c *Client) {
 		if base != "" {
@@ -63,6 +95,9 @@ func WithBaseURL(base string) Option {
 }
 
 // WithHTTPClient supplies a custom *http.Client (timeouts, transport, proxies).
+//
+// Use it for Stream: the default client's 30s timeout applies to the whole
+// response, and an event stream is meant to stay open for longer than that.
 func WithHTTPClient(hc *http.Client) Option {
 	return func(c *Client) {
 		if hc != nil {
@@ -71,14 +106,18 @@ func WithHTTPClient(hc *http.Client) Option {
 	}
 }
 
-// WithRetries enables opt-in automatic retries of TRANSIENT failures (network
-// errors, 429, 502, 503, 504, and anything the API's own error catalog marks
-// retryable). n is the number of RE-attempts; 0 (the default) is off.
+// WithRetries enables opt-in automatic retries of transient failures: network
+// errors, and 429/502/503/504. n is the number of re-attempts; 0 (the default)
+// is off.
 //
-// Applied to GETs always, and to POSTs ONLY when the call carries an
-// Idempotency-Key, so enabling this can never double-report an event. Backoff is
-// 300ms doubling per attempt, or the server's own Retry-After when it sent one,
-// capped at 5s either way. Tune with WithRetryBackoff.
+// Applied to GETs only. Every GET on this API is a read and repeating one
+// changes nothing. CreateInvestigation is never retried: the API accepts no
+// idempotency key, so a repeated POST would enqueue a second investigation for
+// the same report, and two runs against one issue is not a thing this client
+// will cause on its own.
+//
+// Backoff is 300ms doubling per attempt, or the server's own Retry-After when
+// one was sent, capped at 5s either way. Tune with WithRetryBackoff.
 func WithRetries(n int) Option {
 	return func(c *Client) {
 		if n > 0 {
@@ -88,8 +127,9 @@ func WithRetries(n int) Option {
 }
 
 // WithRetryBackoff overrides the first backoff wait and the ceiling on any
-// single wait (defaults 300ms and 5s). The cap matters: a monthly-quota 429 can
-// carry a Retry-After of days, and without it a retry would hang the call.
+// single wait (defaults 300ms and 5s). The cap matters: a Retry-After from a
+// proxy in front of the engine can run to minutes, and without a ceiling a
+// retry would hang the call for as long as that header says.
 func WithRetryBackoff(base, max time.Duration) Option {
 	return func(c *Client) {
 		if base > 0 {
@@ -102,7 +142,7 @@ func WithRetryBackoff(base, max time.Duration) Option {
 }
 
 // NewClient builds a Client. With no options it targets DefaultBaseURL with a
-// 30s-timeout HTTP client, no API key (public endpoints only) and no retries.
+// 30s-timeout HTTP client, no API key and no retries.
 func NewClient(opts ...Option) *Client {
 	c := &Client{
 		baseURL:       DefaultBaseURL,
@@ -118,106 +158,27 @@ func NewClient(opts ...Option) *Client {
 	return c
 }
 
-// APIError is returned for any non-2xx API response. It carries the HTTP
-// status, the API's own error message (from the JSON `error` or `message`
-// field) and the request path.
-//
-// It also carries everything needed to debug the failure later:
-//
-//   - RequestID: the X-Request-Id correlation id. Log it. Quoting it lets
-//     Credda find the exact request in our logs; without it, support starts
-//     from "describe what happened".
-//   - Code: the stable machine code (see GET /api/v1/errors).
-//   - Details: structured context, e.g. one entry per failed field on a
-//     VALIDATION_ERROR.
-//   - RetryAfter: how long the server asked you to wait (every 429 says so);
-//     zero when it did not.
-type APIError struct {
-	StatusCode int
-	Message    string
-	Path       string
-	// Code is the API's stable machine code, e.g. "QUOTA_EXCEEDED".
-	Code string
-	// RequestID is the X-Request-Id correlation id for this request.
-	RequestID string
-	// Details is the raw `details` field, left as JSON so a caller can decode
-	// it into whatever shape the specific code documents.
-	Details json.RawMessage
-	// RetryAfter is the server's requested back-off. Zero when not sent.
-	RetryAfter time.Duration
-	// Retryable is the API's own verdict on whether repeating the identical
-	// request can succeed later. Never retry when false.
-	Retryable bool
-}
-
-func (e *APIError) Error() string {
-	if e.RequestID != "" {
-		return fmt.Sprintf("credda: %s (status %d, path %s, requestId %s)", e.Message, e.StatusCode, e.Path, e.RequestID)
-	}
-	return fmt.Sprintf("credda: %s (status %d, path %s)", e.Message, e.StatusCode, e.Path)
-}
-
-// parseRetryAfter converts a Retry-After header into a duration. Accepts the
-// delta-seconds form the API always sends and the HTTP-date form the spec also
-// permits; returns 0 for absent/unparseable values and never returns negative.
-func parseRetryAfter(raw string, now time.Time) time.Duration {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return 0
-	}
-	if secs, err := strconv.Atoi(raw); err == nil {
-		if secs < 0 {
-			return 0
-		}
-		return time.Duration(secs) * time.Second
-	}
-	if at, err := http.ParseTime(raw); err == nil {
-		if d := at.Sub(now); d > 0 {
-			return d
-		}
-		return 0
-	}
-	return 0
-}
-
-// AsAPIError reports whether err is (or wraps) an *APIError, returning it.
-func AsAPIError(err error) (*APIError, bool) {
-	var apiErr *APIError
-	if errors.As(err, &apiErr) {
-		return apiErr, true
-	}
-	return nil, false
-}
-
 // ── transport ───────────────────────────────────────────────────────────────
 
 type requestOptions struct {
-	method      string
-	path        string // relative to apiPrefix unless absolute is true
-	absolute    bool   // path is relative to the API root (for /.well-known/*)
-	body        any
-	needsAPIKey bool
-	headers     map[string]string
+	method   string
+	path     string // relative to apiPrefix unless absolute is true
+	absolute bool   // path is relative to the API root (for /livez)
+	body     any
+	headers  map[string]string
+	accept   string
+	// raw suppresses JSON decoding; the caller is handed the response instead.
+	raw bool
 }
 
 // safeToRepeat reports whether repeating this request can only ever be
-// exactly-once: GETs always, POSTs only when idempotency-keyed. Every other
-// write is left alone, so an opt-in retry cannot double-report.
-func (ro requestOptions) safeToRepeat() bool {
-	switch ro.method {
-	case http.MethodGet:
-		return true
-	case http.MethodPost:
-		_, keyed := ro.headers["Idempotency-Key"]
-		return keyed
-	}
-	return false
-}
+// exactly-once. GETs, and nothing else: see WithRetries.
+func (ro requestOptions) safeToRepeat() bool { return ro.method == http.MethodGet }
 
 // retryable decides whether err is worth repeating. A non-APIError is a
-// transport failure, which is. An APIError is when the API's own catalog says
-// so, or when the status is transient: those also cover the edge cases the JSON
-// envelope never reaches, a gateway or rate limiter in front of the API.
+// transport failure, which is. An APIError is when the status is transient:
+// 429 and 5xx gateway statuses from a proxy, and 503, which is what the engine
+// itself answers for UNAVAILABLE and TOO_MANY_STREAMS.
 func retryable(err error) bool {
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
@@ -227,13 +188,12 @@ func retryable(err error) bool {
 	case 429, 502, 503, 504:
 		return true
 	}
-	return apiErr.Retryable
+	return false
 }
 
-// retryDelay is the wait before attempt i (1-based). The server's own
-// Retry-After wins when it sent one: it knows when the window resets, and
-// waiting less just earns another 429. The cap applies either way, since a
-// monthly-quota Retry-After can run to days.
+// retryDelay is the wait before attempt i (1-based). A Retry-After wins when
+// one was sent: whatever put it there knows when the window reopens, and
+// waiting less just earns the same answer again.
 func (c *Client) retryDelay(i int, lastErr error) time.Duration {
 	delay := c.maxRetryDelay
 	if i-1 < 62 {
@@ -250,15 +210,18 @@ func (c *Client) retryDelay(i int, lastErr error) time.Duration {
 }
 
 func (c *Client) do(ctx context.Context, ro requestOptions, out any) error {
-	if ro.needsAPIKey && c.apiKey == "" {
-		return fmt.Errorf("credda: %s %s requires an API key (construct the client with WithAPIKey)", ro.method, ro.path)
-	}
+	_, err := c.doRaw(ctx, ro, out)
+	return err
+}
 
+// doRaw runs the request with retries. When ro.raw is set the *http.Response is
+// returned with its body unread and unclosed, which is what Stream needs.
+func (c *Client) doRaw(ctx context.Context, ro requestOptions, out any) (*http.Response, error) {
 	var encoded []byte
 	if ro.body != nil {
 		b, err := json.Marshal(ro.body)
 		if err != nil {
-			return fmt.Errorf("credda: encoding request body: %w", err)
+			return nil, fmt.Errorf("credda: encoding request body: %w", err)
 		}
 		encoded = b
 	}
@@ -275,23 +238,23 @@ func (c *Client) do(ctx context.Context, ro requestOptions, out any) error {
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return ctx.Err()
+				return nil, ctx.Err()
 			case <-timer.C:
 			}
 		}
-		err := c.attempt(ctx, ro, encoded, out)
+		resp, err := c.attempt(ctx, ro, encoded, out)
 		if err == nil {
-			return nil
+			return resp, nil
 		}
 		lastErr = err
 		if !retryable(err) {
-			return err
+			return nil, err
 		}
 	}
-	return lastErr
+	return nil, lastErr
 }
 
-func (c *Client) attempt(ctx context.Context, ro requestOptions, encoded []byte, out any) error {
+func (c *Client) attempt(ctx context.Context, ro requestOptions, encoded []byte, out any) (*http.Response, error) {
 	prefix := apiPrefix
 	if ro.absolute {
 		prefix = ""
@@ -305,13 +268,19 @@ func (c *Client) attempt(ctx context.Context, ro requestOptions, encoded []byte,
 
 	req, err := http.NewRequestWithContext(ctx, ro.method, full, reader)
 	if err != nil {
-		return fmt.Errorf("credda: building request: %w", err)
+		return nil, fmt.Errorf("credda: building request: %w", err)
 	}
 	if encoded != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if c.apiKey != "" && ro.needsAPIKey {
+	// Sent whenever a key is configured. There is no per-route "public" flag,
+	// because CREDDA_AUTH is a deployment-wide switch: a disabled deployment
+	// ignores the header, an enforced one requires it on every /api route.
+	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	if ro.accept != "" {
+		req.Header.Set("Accept", ro.accept)
 	}
 	for k, v := range ro.headers {
 		req.Header.Set(k, v)
@@ -319,92 +288,52 @@ func (c *Client) attempt(ctx context.Context, ro requestOptions, encoded []byte,
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("credda: %s %s: %w", ro.method, ro.path, err)
+		return nil, fmt.Errorf("credda: %s %s: %w", ro.method, ro.path, err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer resp.Body.Close()
+		raw, readErr := io.ReadAll(resp.Body)
+		return nil, apiErrorFrom(resp, ro.path, raw, readErr)
+	}
+
+	if ro.raw {
+		return resp, nil
 	}
 	defer resp.Body.Close()
 
-	raw, readErr := io.ReadAll(resp.Body)
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		msg := ""
-		var body struct {
-			Error     string          `json:"error"`
-			Message   string          `json:"message"`
-			Code      string          `json:"code"`
-			RequestID string          `json:"requestId"`
-			Retryable bool            `json:"retryable"`
-			Details   json.RawMessage `json:"details"`
-		}
-		if readErr == nil && json.Unmarshal(raw, &body) == nil {
-			msg = body.Error
-			if msg == "" {
-				msg = body.Message
-			}
-		}
-		if msg == "" {
-			msg = fmt.Sprintf("request failed (%d)", resp.StatusCode)
-		}
-		// The header is authoritative: it survives a non-JSON body; the body
-		// echoes the same id.
-		requestID := resp.Header.Get("X-Request-Id")
-		if requestID == "" {
-			requestID = body.RequestID
-		}
-		return &APIError{
-			StatusCode: resp.StatusCode,
-			Message:    msg,
-			Path:       ro.path,
-			Code:       body.Code,
-			RequestID:  requestID,
-			Details:    body.Details,
-			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
-			Retryable:  body.Retryable,
-		}
-	}
-
 	if out == nil {
-		return nil
+		return resp, nil
 	}
+	raw, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
-		return fmt.Errorf("credda: reading response body: %w", readErr)
+		return nil, fmt.Errorf("credda: reading response body: %w", readErr)
+	}
+	if s, ok := out.(*string); ok {
+		*s = string(raw)
+		return resp, nil
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
-		// 204 / empty body for a caller that expected JSON. Leave zero value.
-		return nil
+		// 204 or an empty body for a caller that expected JSON. Leave the zero
+		// value rather than reporting a decode failure for a body that is
+		// legitimately absent.
+		return resp, nil
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("credda: decoding response from %s: %w", ro.path, err)
+		return nil, fmt.Errorf("credda: decoding response from %s: %w", ro.path, err)
 	}
-	return nil
+	return resp, nil
 }
 
-func (c *Client) get(ctx context.Context, path string, needsKey bool, out any) error {
-	return c.do(ctx, requestOptions{method: http.MethodGet, path: path, needsAPIKey: needsKey}, out)
+func (c *Client) get(ctx context.Context, path string, out any) error {
+	return c.do(ctx, requestOptions{method: http.MethodGet, path: path}, out)
 }
 
-func (c *Client) getWellKnown(ctx context.Context, path string, out any) error {
-	return c.do(ctx, requestOptions{method: http.MethodGet, path: path, absolute: true}, out)
+func (c *Client) post(ctx context.Context, path string, body, out any) error {
+	return c.do(ctx, requestOptions{method: http.MethodPost, path: path, body: body}, out)
 }
 
-func (c *Client) post(ctx context.Context, path string, body any, headers map[string]string, out any) error {
-	return c.do(ctx, requestOptions{
-		method: http.MethodPost, path: path, body: body, needsAPIKey: true, headers: headers,
-	}, out)
-}
-
-// postPublic POSTs without attaching an API key, for token-gated public
-// endpoints (e.g. a counterparty responding to a confirmation request).
-func (c *Client) postPublic(ctx context.Context, path string, body any, out any) error {
-	return c.do(ctx, requestOptions{method: http.MethodPost, path: path, body: body, needsAPIKey: false}, out)
-}
-
-func (c *Client) patch(ctx context.Context, path string, body any, out any) error {
-	return c.do(ctx, requestOptions{method: http.MethodPatch, path: path, body: body, needsAPIKey: true}, out)
-}
-
-func (c *Client) delete(ctx context.Context, path string) error {
-	return c.do(ctx, requestOptions{method: http.MethodDelete, path: path, needsAPIKey: true}, nil)
-}
+// ── query building ──────────────────────────────────────────────────────────
 
 func esc(s string) string { return url.PathEscape(s) }
 
@@ -433,20 +362,29 @@ func setBool(qs url.Values, key string, v *bool) {
 	}
 }
 
-func setFloat(qs url.Values, key string, v *float64) {
-	if v != nil {
-		qs.Set(key, strconv.FormatFloat(*v, 'f', -1, 64))
-	}
-}
-
-// Int is a helper for building optional int query/body fields.
+// Int is a helper for building optional int query fields.
 func Int(v int) *int { return &v }
 
-// Bool is a helper for building optional bool body fields.
+// Bool is a helper for building optional bool query fields.
 func Bool(v bool) *bool { return &v }
 
-// Float is a helper for building optional float body fields.
-func Float(v float64) *float64 { return &v }
-
-// String is a helper for building optional string body fields.
+// String is a helper for building optional string fields.
 func String(v string) *string { return &v }
+
+// Page is the limit/offset pair every paged route on this API accepts.
+//
+// Nil means "let the server decide", which is limit=50, offset=0 everywhere.
+// The server clamps limit to 100 on every route and refuses anything larger
+// with a 400 rather than quietly reducing it.
+type Page struct {
+	Limit  *int
+	Offset *int
+}
+
+func (p *Page) apply(qs url.Values) {
+	if p == nil {
+		return
+	}
+	setInt(qs, "limit", p.Limit)
+	setInt(qs, "offset", p.Offset)
+}

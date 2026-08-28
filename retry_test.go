@@ -14,7 +14,7 @@ import (
 func statusServer(t *testing.T, retryAfter string, statuses ...int) (*httptest.Server, *int32) {
 	t.Helper()
 	var calls int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		n := int(atomic.AddInt32(&calls, 1)) - 1
 		if n >= len(statuses) {
 			n = len(statuses) - 1
@@ -23,219 +23,201 @@ func statusServer(t *testing.T, retryAfter string, statuses ...int) (*httptest.S
 		if code >= 400 && retryAfter != "" {
 			w.Header().Set("Retry-After", retryAfter)
 		}
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
-		w.Write([]byte(`{}`))
+		if code >= 400 {
+			_, _ = w.Write([]byte(`{"error":{"code":"UNAVAILABLE","message":"not now"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"total":0}`))
 	}))
 	t.Cleanup(srv.Close)
 	return srv, &calls
 }
 
-func TestRetryPolicy(t *testing.T) {
-	fast := func(base string, opts ...Option) *Client {
-		return NewClient(append([]Option{
-			WithBaseURL(base),
-			WithAPIKey("crd_test_key"),
-			WithRetryBackoff(time.Millisecond, 20*time.Millisecond),
-		}, opts...)...)
-	}
-
-	tests := []struct {
-		name      string
-		statuses  []int
-		opts      []Option
-		call      func(c *Client) error
-		wantCalls int32
-		wantErr   bool
-	}{
-		{
-			name:     "default is no retry",
-			statuses: []int{429, 200},
-			call: func(c *Client) error {
-				_, err := c.GetBenchmarks(context.Background())
-				return err
-			},
-			wantCalls: 1,
-			wantErr:   true,
-		},
-		{
-			name:     "GET retries a transient 503 and succeeds",
-			statuses: []int{503, 200},
-			opts:     []Option{WithRetries(2)},
-			call: func(c *Client) error {
-				_, err := c.GetBenchmarks(context.Background())
-				return err
-			},
-			wantCalls: 2,
-		},
-		{
-			name:     "retry count is bounded",
-			statuses: []int{503},
-			opts:     []Option{WithRetries(2)},
-			call: func(c *Client) error {
-				_, err := c.GetBenchmarks(context.Background())
-				return err
-			},
-			wantCalls: 3,
-			wantErr:   true,
-		},
-		{
-			name:     "non-transient 404 is never retried",
-			statuses: []int{404},
-			opts:     []Option{WithRetries(3)},
-			call: func(c *Client) error {
-				_, err := c.GetBenchmarks(context.Background())
-				return err
-			},
-			wantCalls: 1,
-			wantErr:   true,
-		},
-		{
-			name:     "idempotency-keyed POST is retried",
-			statuses: []int{429, 200},
-			opts:     []Option{WithRetries(2)},
-			call: func(c *Client) error {
-				_, err := c.CreateConfirmationRequest(context.Background(), CreateConfirmationInput{}, "order-42")
-				return err
-			},
-			wantCalls: 2,
-		},
-		{
-			name:     "bare POST is never retried",
-			statuses: []int{429, 200},
-			opts:     []Option{WithRetries(3)},
-			call: func(c *Client) error {
-				_, err := c.CreateConfirmationRequest(context.Background(), CreateConfirmationInput{}, "")
-				return err
-			},
-			wantCalls: 1,
-			wantErr:   true,
-		},
-		{
-			name:     "keyless single-use respond is never retried",
-			statuses: []int{503, 200},
-			opts:     []Option{WithRetries(3)},
-			call: func(c *Client) error {
-				_, err := c.RespondToConfirmation(context.Background(), "cf_1", "tok", "confirm")
-				return err
-			},
-			wantCalls: 1,
-			wantErr:   true,
-		},
-		{
-			name:     "DELETE is never retried",
-			statuses: []int{503, 200},
-			opts:     []Option{WithRetries(3)},
-			call: func(c *Client) error {
-				return c.DeletePolicy(context.Background(), "pol_1")
-			},
-			wantCalls: 1,
-			wantErr:   true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			srv, calls := statusServer(t, "", tc.statuses...)
-			err := tc.call(fast(srv.URL, tc.opts...))
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("error = %v, wantErr %v", err, tc.wantErr)
-			}
-			if got := atomic.LoadInt32(calls); got != tc.wantCalls {
-				t.Fatalf("requests = %d, want %d", got, tc.wantCalls)
-			}
-		})
-	}
+func fastRetryClient(base string, n int) *Client {
+	return NewClient(
+		WithBaseURL(base),
+		WithAPIKey("k"),
+		WithRetries(n),
+		WithRetryBackoff(time.Millisecond, 5*time.Millisecond),
+	)
 }
 
-func TestServerVerdictDecidesUncoveredStatuses(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		body      string
-		wantCalls int32
-	}{
-		{"catalog says retryable", `{"code":"INTERNAL_ERROR","retryable":true}`, 3},
-		{"catalog says it is not", `{"code":"PLAN_REQUIRED","retryable":false}`, 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var calls int32
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				atomic.AddInt32(&calls, 1)
-				w.WriteHeader(500)
-				w.Write([]byte(tc.body))
-			}))
-			defer srv.Close()
-			c := NewClient(WithBaseURL(srv.URL), WithRetries(2),
-				WithRetryBackoff(time.Millisecond, 20*time.Millisecond))
-			if _, err := c.GetBenchmarks(context.Background()); err == nil {
-				t.Fatal("expected an error")
-			}
-			if got := atomic.LoadInt32(&calls); got != tc.wantCalls {
-				t.Fatalf("requests = %d, want %d", got, tc.wantCalls)
-			}
-		})
-	}
-}
-
-func TestMissingAPIKeyIsNotRetried(t *testing.T) {
-	srv, calls := statusServer(t, "", 200)
-	c := NewClient(WithBaseURL(srv.URL), WithRetries(3),
-		WithRetryBackoff(time.Second, time.Second))
-	start := time.Now()
-	if err := c.DeletePolicy(context.Background(), "pol_1"); err == nil {
-		t.Fatal("expected an error")
-	}
-	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
-		t.Fatalf("took %v, a client-side precondition must fail without backoff", elapsed)
-	}
-	if got := atomic.LoadInt32(calls); got != 0 {
-		t.Fatalf("requests = %d, want 0", got)
-	}
-}
-
-func TestRetryAfterIsHonoredAndCapped(t *testing.T) {
-	t.Run("honored over exponential backoff", func(t *testing.T) {
-		srv, calls := statusServer(t, "1", 429, 200)
-		c := NewClient(WithBaseURL(srv.URL), WithRetries(1),
-			WithRetryBackoff(50*time.Millisecond, 5*time.Second))
-		start := time.Now()
-		if _, err := c.GetBenchmarks(context.Background()); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if elapsed := time.Since(start); elapsed < time.Second {
-			t.Fatalf("waited %v, expected the server's 1s Retry-After to win over the 50ms base", elapsed)
-		}
-		if got := atomic.LoadInt32(calls); got != 2 {
-			t.Fatalf("requests = %d, want 2", got)
-		}
-	})
-
-	t.Run("capped so a quota reset cannot hang the call", func(t *testing.T) {
-		srv, calls := statusServer(t, "86400", 429, 200)
-		c := NewClient(WithBaseURL(srv.URL), WithRetries(1),
-			WithRetryBackoff(time.Millisecond, 30*time.Millisecond))
-		start := time.Now()
-		if _, err := c.GetBenchmarks(context.Background()); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if elapsed := time.Since(start); elapsed > 2*time.Second {
-			t.Fatalf("waited %v, expected the 30ms cap to bound a 24h Retry-After", elapsed)
-		}
-		if got := atomic.LoadInt32(calls); got != 2 {
-			t.Fatalf("requests = %d, want 2", got)
-		}
-	})
-}
-
-func TestRetryStopsOnCancelledContext(t *testing.T) {
-	srv, calls := statusServer(t, "", 503)
-	c := NewClient(WithBaseURL(srv.URL), WithRetries(5),
-		WithRetryBackoff(time.Second, 5*time.Second))
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	if _, err := c.GetBenchmarks(ctx); err == nil {
-		t.Fatal("expected an error")
+func TestRetriesAreOffByDefault(t *testing.T) {
+	srv, calls := statusServer(t, "", 503, 200)
+	c := NewClient(WithBaseURL(srv.URL), WithAPIKey("k"))
+	if _, err := c.ListInvestigations(context.Background(), nil); err == nil {
+		t.Fatal("want the 503 to surface with retries off")
 	}
 	if got := atomic.LoadInt32(calls); got != 1 {
-		t.Fatalf("requests = %d, want 1", got)
+		t.Errorf("calls = %d, want 1; retries must be opt-in", got)
+	}
+}
+
+func TestRetryRecoversFromATransient503(t *testing.T) {
+	srv, calls := statusServer(t, "", 503, 503, 200)
+	if _, err := fastRetryClient(srv.URL, 3).ListInvestigations(context.Background(), nil); err != nil {
+		t.Fatalf("ListInvestigations: %v", err)
+	}
+	if got := atomic.LoadInt32(calls); got != 3 {
+		t.Errorf("calls = %d, want 3", got)
+	}
+}
+
+// The transient set: 429 and the gateway statuses a proxy in front of the
+// engine sends, plus 503, which is what the engine itself answers for
+// UNAVAILABLE and TOO_MANY_STREAMS.
+func TestTransientStatusesAreRetried(t *testing.T) {
+	for _, status := range []int{429, 502, 503, 504} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv, calls := statusServer(t, "", status, 200)
+			if _, err := fastRetryClient(srv.URL, 2).ListInvestigations(context.Background(), nil); err != nil {
+				t.Fatalf("status %d: %v", status, err)
+			}
+			if got := atomic.LoadInt32(calls); got != 2 {
+				t.Errorf("status %d: calls = %d, want 2", status, got)
+			}
+		})
+	}
+}
+
+// A 4xx that is not 429 is the caller's request being wrong. Repeating it
+// identically produces the identical refusal and only burns time.
+func TestClientErrorsAreNotRetried(t *testing.T) {
+	for _, status := range []int{400, 401, 404, 413} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv, calls := statusServer(t, "", status)
+			if _, err := fastRetryClient(srv.URL, 3).ListInvestigations(context.Background(), nil); err == nil {
+				t.Fatalf("status %d: want an error", status)
+			}
+			if got := atomic.LoadInt32(calls); got != 1 {
+				t.Errorf("status %d: calls = %d, want 1", status, got)
+			}
+		})
+	}
+}
+
+// THE ONE THAT MATTERS. CreateInvestigation is the only write on this API and
+// it carries no idempotency key, because the API accepts none. A retried POST
+// would enqueue a SECOND investigation against the same report, and two runs on
+// one issue is not something this client will cause on its own.
+func TestCreateInvestigationIsNeverRetried(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(503)
+		_, _ = w.Write([]byte(`{"error":{"code":"UNAVAILABLE","message":"not now"}}`))
+	}))
+	defer srv.Close()
+
+	c := fastRetryClient(srv.URL, 5)
+	_, err := c.CreateInvestigation(context.Background(), CreateInvestigationInput{
+		RepositoryID: "repo_1", IssueTitle: "Checkout 500s", IssueBody: "on submit",
+	})
+	if err == nil {
+		t.Fatal("want the 503 to surface")
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("CreateInvestigation was sent %d times; a retried POST enqueues a duplicate investigation", got)
+	}
+}
+
+// A transport failure means nothing answered, so there is nothing to conclude
+// from it except to try again.
+func TestTransportFailuresAreRetried(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&calls, 1)
+		if n < 3 {
+			// Close without a response.
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Skip("no hijacker on this server")
+			}
+			conn, _, err := hj.Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"total":0}`))
+	}))
+	defer srv.Close()
+
+	if _, err := fastRetryClient(srv.URL, 4).ListRepositories(context.Background(), nil); err != nil {
+		t.Fatalf("ListRepositories: %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 3 {
+		t.Errorf("calls = %d, want 3", got)
+	}
+}
+
+func TestRetriesAreBounded(t *testing.T) {
+	srv, calls := statusServer(t, "", 503)
+	if _, err := fastRetryClient(srv.URL, 2).ListInvestigations(context.Background(), nil); err == nil {
+		t.Fatal("want the error after the attempts are spent")
+	}
+	if got := atomic.LoadInt32(calls); got != 3 {
+		t.Errorf("calls = %d, want 3 (1 + 2 re-attempts)", got)
+	}
+}
+
+// Retry-After wins over the backoff schedule when one is sent, but the cap
+// applies either way: without a ceiling, a Retry-After of an hour from a proxy
+// would hang the call for an hour.
+func TestRetryAfterIsHonouredAndCapped(t *testing.T) {
+	srv, _ := statusServer(t, "3600", 503, 200)
+	c := fastRetryClient(srv.URL, 2)
+
+	start := time.Now()
+	if _, err := c.ListInvestigations(context.Background(), nil); err != nil {
+		t.Fatalf("ListInvestigations: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("waited %v; a Retry-After of an hour was not capped", elapsed)
+	}
+}
+
+func TestRetryDelayUsesRetryAfterOverBackoff(t *testing.T) {
+	c := NewClient(WithRetryBackoff(time.Millisecond, time.Minute))
+	err := &APIError{StatusCode: 429, RetryAfter: 7 * time.Second}
+	if got := c.retryDelay(1, err); got != 7*time.Second {
+		t.Errorf("retryDelay = %v, want 7s from Retry-After", got)
+	}
+}
+
+func TestRetryDelayBacksOffExponentiallyAndCaps(t *testing.T) {
+	c := NewClient(WithRetryBackoff(100*time.Millisecond, 400*time.Millisecond))
+	want := []time.Duration{100, 200, 400, 400, 400}
+	for i, w := range want {
+		if got := c.retryDelay(i+1, nil); got != w*time.Millisecond {
+			t.Errorf("retryDelay(%d) = %v, want %v", i+1, got, w*time.Millisecond)
+		}
+	}
+	// A huge attempt number must not shift past the width of the duration and
+	// come back as a negative or tiny wait.
+	if got := c.retryDelay(9999, nil); got != 400*time.Millisecond {
+		t.Errorf("retryDelay(9999) = %v, want the cap", got)
+	}
+}
+
+// A cancelled context must interrupt the WAIT, not only the request. A caller
+// that gave up should not be held for the remaining backoff.
+func TestContextCancellationInterruptsTheBackoff(t *testing.T) {
+	srv, _ := statusServer(t, "", 503)
+	c := NewClient(WithBaseURL(srv.URL), WithAPIKey("k"),
+		WithRetries(5), WithRetryBackoff(2*time.Second, 10*time.Second))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	if _, err := c.ListInvestigations(ctx, nil); err == nil {
+		t.Fatal("want an error")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("waited %v after the context was done", elapsed)
 	}
 }
