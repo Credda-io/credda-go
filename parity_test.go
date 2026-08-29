@@ -80,6 +80,22 @@ func TestRequestShapes(t *testing.T) {
 			wantQuery:  "limit=25&offset=50&state=REPRODUCED_AND_DIAGNOSED",
 		},
 		{
+			name:     "ListInvestigations with repository, signal and outcome",
+			route:    "routes/investigations.ts listQuery",
+			response: `{"investigations":[],"total":0}`,
+			call: func(c *Client) error {
+				_, err := c.ListInvestigations(context.Background(), &InvestigationQuery{
+					Repository: "repo_1",
+					Signal:     "sig_1",
+					Outcome:    "RESOLVED",
+				})
+				return err
+			},
+			wantMethod: http.MethodGet,
+			wantPath:   "/api/investigations",
+			wantQuery:  "outcome=RESOLVED&repository=repo_1&signal=sig_1",
+		},
+		{
 			name:     "CreateInvestigation",
 			route:    "routes/investigations.ts app.post('/') createBody",
 			response: `{"investigation":{"id":"inv_1","state":"CREATED"},"hypotheses":[],"patches":[],"verifications":[],"evidenceCount":0,"latestSequence":0}`,
@@ -166,6 +182,17 @@ func TestRequestShapes(t *testing.T) {
 			wantMethod: http.MethodGet,
 			wantPath:   "/api/repositories",
 			wantQuery:  "limit=100",
+		},
+		{
+			name:     "GetRepository",
+			route:    "routes/repositories.ts app.get('/:id')",
+			response: `{"repository":{"id":"repo_1"}}`,
+			call: func(c *Client) error {
+				_, err := c.GetRepository(context.Background(), "repo_1")
+				return err
+			},
+			wantMethod: http.MethodGet,
+			wantPath:   "/api/repositories/repo_1",
 		},
 		{
 			name:     "RepositoryLearnings with kind",
@@ -286,6 +313,34 @@ func TestRequestShapes(t *testing.T) {
 			},
 			wantMethod: http.MethodGet,
 			wantPath:   "/api/validations/val_1/evidence",
+		},
+		{
+			name:     "ValidationFindings with severity and status",
+			route:    "routes/validations.ts findingsQuery",
+			response: `{"findings":[],"total":0}`,
+			call: func(c *Client) error {
+				_, err := c.ValidationFindings(context.Background(), "val_1", &FindingQuery{
+					Severity: "HIGH", Status: "OPEN",
+				})
+				return err
+			},
+			wantMethod: http.MethodGet,
+			wantPath:   "/api/validations/val_1/findings",
+			wantQuery:  "severity=HIGH&status=OPEN",
+		},
+		{
+			name:     "ValidationEvidence with type",
+			route:    "routes/validations.ts evidenceQuery",
+			response: `{"evidence":[],"total":0}`,
+			call: func(c *Client) error {
+				_, err := c.ValidationEvidence(context.Background(), "val_1", &EvidenceQuery{
+					Type: "TEST_RESULT",
+				})
+				return err
+			},
+			wantMethod: http.MethodGet,
+			wantPath:   "/api/validations/val_1/evidence",
+			wantQuery:  "type=TEST_RESULT",
 		},
 		{
 			name:     "ValidationEvents",

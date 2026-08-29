@@ -117,6 +117,23 @@ var EvidenceTypes = []string{
 	"VULNERABILITY",
 }
 
+// FindingSeverities is the severity filter vocabulary for ValidationFindings,
+// from FINDING_SEVERITIES in packages/shared/src/validation.ts.
+var FindingSeverities = []string{
+	"HIGH",
+	"MEDIUM",
+	"LOW",
+}
+
+// FindingStatuses is the status filter vocabulary for ValidationFindings, from
+// FINDING_STATUSES in packages/shared/src/validation.ts.
+var FindingStatuses = []string{
+	"OPEN",
+	"DISMISSED",
+	"ENVIRONMENT_RELATED",
+	"RESOLVED",
+}
+
 // ValidationStates is the state filter vocabulary for ListValidations, from
 // VALIDATION_STATES in packages/shared/src/validation.ts.
 var ValidationStates = []string{

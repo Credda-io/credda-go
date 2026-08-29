@@ -157,6 +157,7 @@ or `DELETE` at all.
 | Method | Route |
 | --- | --- |
 | `ListRepositories` | `GET /api/repositories` |
+| `GetRepository` | `GET /api/repositories/{id}` |
 | `RepositoryLearnings` | `GET /api/repositories/{id}/learnings` |
 
 ### Resolutions
@@ -254,6 +255,10 @@ for ev := range events {
 		}
 		log.Fatal(ev.Err)
 	}
+	if ev.CompletedState != "" {
+		fmt.Println("finished:", ev.CompletedState)
+		break
+	}
 	fmt.Printf("[%d] %s: %s\n", ev.Sequence, ev.Type, ev.Event.Summary)
 }
 ```
@@ -262,10 +267,14 @@ Keep the last `Sequence` you saw. Pass it as `StreamOptions.Since` to resume
 without replaying — it goes out as both the `since` parameter and the
 `Last-Event-ID` header.
 
-A stream ends when you cancel `ctx`, when the engine drops it after five minutes
-carrying nothing, when the key is revoked, or on a transport failure. Debug-
-severity events are never sent over a stream at all; use `InvestigationEvents`
-with `IncludeDebug` for those.
+A stream ends when the run reaches a terminal state — the engine sends a
+`complete` frame, which arrives as a final item carrying `CompletedState` and no
+`Event` — when you cancel `ctx`, when the engine drops it after five minutes
+carrying nothing (`ErrStreamIdle`, and the run has *not* finished, so resuming
+from the last `Sequence` is the answer), when the key is revoked
+(`ErrStreamRevoked`), or on a transport failure. Debug-severity events are never
+sent over a stream at all; use `InvestigationEvents` with `IncludeDebug` for
+those.
 
 ### Read what it established
 

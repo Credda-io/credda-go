@@ -319,3 +319,70 @@ func TestEmptyStreamClosesCleanly(t *testing.T) {
 		t.Fatalf("unexpected item: %+v", ev)
 	}
 }
+
+// The run's own answer. The engine drains the timeline, then says `complete`
+// with the terminal state and closes; before this was handled the frame was
+// decoded as if it were an event and reached the caller as an empty Event with
+// sequence 0 — a phantom entry in a timeline, and no way to tell a finished run
+// from a dropped link.
+func TestStreamSurfacesTheTerminalState(t *testing.T) {
+	c, _ := sseServer(t,
+		"id: 1\nevent: state.changed\ndata: "+
+			`{"id":"e1","investigationId":"inv_1","sequence":1,"type":"state.changed",`+
+			`"severity":"info","summary":"running","state":null,"agentRunId":null,`+
+			`"toolCallId":null,"evidenceIds":[],"metadata":{},"createdAt":"2026-08-27T10:00:00.000Z"}`+"\n\n",
+		"event: complete\ndata: {\"state\":\"RESOLVED\"}\n\n",
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ch, err := c.StreamInvestigation(ctx, "inv_1", nil)
+	if err != nil {
+		t.Fatalf("StreamInvestigation: %v", err)
+	}
+
+	var items []StreamEvent
+	for ev := range ch {
+		items = append(items, ev)
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %d, want the event and the completion", len(items))
+	}
+	last := items[1]
+	if last.Err != nil {
+		t.Fatalf("a finished run reported an error: %v", last.Err)
+	}
+	if last.CompletedState != "RESOLVED" {
+		t.Errorf("CompletedState = %q, want RESOLVED", last.CompletedState)
+	}
+	if last.Event != nil {
+		t.Error("the completion frame was decoded as an event")
+	}
+}
+
+// A run that went quiet without finishing. Not a transport failure and not an
+// answer: the engine declines to hold the connection, and resuming from the
+// last sequence is what a client does about it.
+func TestStreamSurfacesTheIdleDrop(t *testing.T) {
+	c, _ := sseServer(t,
+		"event: idle\ndata: {\"reason\":\"no events for five minutes; the run has not reached a terminal state\"}\n\n",
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ch, err := c.StreamInvestigation(ctx, "inv_1", nil)
+	if err != nil {
+		t.Fatalf("StreamInvestigation: %v", err)
+	}
+	ev := <-ch
+	if !errors.Is(ev.Err, ErrStreamIdle) {
+		t.Fatalf("ev = %+v, want ErrStreamIdle", ev)
+	}
+	if ev.Event != nil {
+		t.Error("the idle frame was decoded as an event")
+	}
+	for range ch {
+	}
+}

@@ -24,6 +24,15 @@ type InvestigationQuery struct {
 	// State filters to one investigation state. Must be a member of
 	// InvestigationStates; anything else is a 400 VALIDATION_FAILED.
 	State string
+	// Repository filters to one repository. An unknown one is a 404 rather
+	// than an empty page, for the reason on ResolutionQuery.
+	Repository string
+	// Signal filters to the investigations one signal caused. An unknown one
+	// is a 404, for the same reason.
+	Signal string
+	// Outcome filters to one outcome. Must be a member of
+	// InvestigationOutcomes.
+	Outcome string
 	Page
 }
 
@@ -37,6 +46,9 @@ func (c *Client) ListInvestigations(ctx context.Context, q *InvestigationQuery) 
 	qs := url.Values{}
 	if q != nil {
 		setStr(qs, "state", q.State)
+		setStr(qs, "repository", q.Repository)
+		setStr(qs, "signal", q.Signal)
+		setStr(qs, "outcome", q.Outcome)
 		q.Page.apply(qs)
 	}
 	var out InvestigationList
@@ -173,6 +185,23 @@ func (c *Client) ListRepositories(ctx context.Context, p *Page) (*RepositoryList
 		return nil, err
 	}
 	return &out, nil
+}
+
+// GetRepository returns one repository by id.
+//
+// GET /api/repositories/{id}
+//
+// Every investigation and validation carries a RepositoryID; this is what
+// resolves one without paging ListRepositories until the id turns up. An
+// unknown id, or one in another organisation, is a 404.
+func (c *Client) GetRepository(ctx context.Context, id string) (*Repository, error) {
+	var out struct {
+		Repository Repository `json:"repository"`
+	}
+	if err := c.get(ctx, "/repositories/"+esc(id), &out); err != nil {
+		return nil, err
+	}
+	return &out.Repository, nil
 }
 
 // LearningQuery filters RepositoryLearnings.
@@ -339,12 +368,28 @@ func (c *Client) ValidationChecks(ctx context.Context, id string, p *Page) (*Che
 	return &out, nil
 }
 
+// FindingQuery filters ValidationFindings. Severity and Status narrow with AND;
+// each is one token, not a set.
+type FindingQuery struct {
+	// Severity must be a member of FindingSeverities.
+	Severity string
+	// Status must be a member of FindingStatuses.
+	Status string
+	Page
+}
+
 // ValidationFindings returns a page of what the run concluded was wrong.
 //
 // GET /api/validations/{id}/findings
-func (c *Client) ValidationFindings(ctx context.Context, id string, p *Page) (*FindingPage, error) {
+//
+// Total is the size of the filtered set, not of the page.
+func (c *Client) ValidationFindings(ctx context.Context, id string, q *FindingQuery) (*FindingPage, error) {
 	qs := url.Values{}
-	p.apply(qs)
+	if q != nil {
+		setStr(qs, "severity", q.Severity)
+		setStr(qs, "status", q.Status)
+		q.Page.apply(qs)
+	}
 	var out FindingPage
 	if err := c.get(ctx, withQuery("/validations/"+esc(id)+"/findings", qs), &out); err != nil {
 		return nil, err
@@ -357,10 +402,14 @@ func (c *Client) ValidationFindings(ctx context.Context, id string, p *Page) (*F
 // GET /api/validations/{id}/evidence
 //
 // Each record carries CheckID, which is what attaches an execution to the check
-// that cited it.
-func (c *Client) ValidationEvidence(ctx context.Context, id string, p *Page) (*EvidencePage, error) {
+// that cited it. The Type filter is the one InvestigationEvidence has, over the
+// same vocabulary.
+func (c *Client) ValidationEvidence(ctx context.Context, id string, q *EvidenceQuery) (*EvidencePage, error) {
 	qs := url.Values{}
-	p.apply(qs)
+	if q != nil {
+		setStr(qs, "type", q.Type)
+		q.Page.apply(qs)
+	}
 	var out EvidencePage
 	if err := c.get(ctx, withQuery("/validations/"+esc(id)+"/evidence", qs), &out); err != nil {
 		return nil, err
