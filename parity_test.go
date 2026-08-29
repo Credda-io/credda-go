@@ -23,28 +23,23 @@ import (
 // or a mis-spelled query parameter fails here rather than at a customer's
 // deployment.
 //
-// REAL cross-SDK parity — this client and @credda/js agreeing — is still NOT
-// asserted here, and the reason has changed. It used to be that credda-js had
-// no client to compare against; it landed one on 2026-08-27, with its own
-// src/lib/surface.test.ts checking its method list against the same engine
-// routes this table reads. So both SDKs are now independently pinned to the
-// source of truth, which catches the failure that matters — a client drifting
-// from the API — in both languages.
+// WHAT IT DOES NOT COVER, AND WHAT NOW DOES.
 //
-// Both tables share one weakness, and it is worth naming rather than implying:
-// a route the ENGINE gains fails neither of them. POST /api/investigations/
-// {id}/cancel shipped in core on 2026-08-29 and both suites stayed green with
-// no method for it. credda-js now lists every route the engine mounts,
-// including the ones it does not wrap, and pins the count, so the omission is
-// at least readable; this table still lists only what this client calls.
+// This table lists what this client CALLS, so a route the ENGINE gains fails
+// nothing here. POST /api/investigations/{id}/cancel shipped in core on
+// 2026-08-29 and left credda-js green at 102 tests with no method for it; this
+// table would have been just as quiet. That gap is now closed in
+// surface_test.go, which loads route-surface.json -- generated in core from
+// apps/api/src/openapi.ts and copied here, not transcribed -- and fails when
+// the engine serves a route this package has neither a method nor a stated
+// reason for. The fixture carries method, path and status codes and nothing
+// else, which is why this file still exists: query parameter names, body
+// encoding and the omission of an absent optional field are not in it, and a
+// wrong one of those is a customer's 400.
 //
-// What that does NOT catch is the two of us reading the same route and
-// disagreeing about it. Nothing here can: the two suites hold two hand-written
-// tables, and a shared misreading agrees with itself. The honest form is one
-// fixture both suites load, generated from the engine's routes rather than
-// transcribed. That is the coordination item, and it is deliberately not faked
-// with an assertion nobody checked — which is the exact failure this file had
-// before it was rewritten.
+// So the two are complementary and neither is redundant. The fixture answers
+// "does the client know about every route"; this table answers "does it call
+// the routes it knows about correctly".
 //
 // Query strings are url.Values.Encode() output, which sorts alphabetically.
 func TestRequestShapes(t *testing.T) {
