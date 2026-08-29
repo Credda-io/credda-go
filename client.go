@@ -1,9 +1,9 @@
 // Package credda is the official Go client for the Credda engine API.
 //
-// Credda finds defects and security vulnerabilities in a company's production
-// and QA environments, reproduces the failure, diagnoses the cause, writes the
-// patch, proves it with a test that fails before and passes after, and opens a
-// pull request. It proposes; it never merges.
+// A customer labels a bug report or a security vulnerability; Credda reproduces
+// the failure, diagnoses the cause, writes the patch, proves it with a test
+// that fails before and passes after, and hands back a diff. Opening a pull
+// request is opt-in and off by default. It proposes; it never merges.
 //
 // This package is a typed reader over that engine's HTTP API. Every method here
 // corresponds to a route mounted in the engine (apps/api/src/app.ts) and every

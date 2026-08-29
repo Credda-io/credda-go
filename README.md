@@ -9,10 +9,11 @@
 
 # `credda`: official Go SDK for the Credda engine API
 
-Credda finds the defects and security vulnerabilities in your production and QA
-environments, reproduces the failure, diagnoses the cause, writes the patch,
-proves it with a test that fails before and passes after, and opens a pull
-request. It proposes. It never merges.
+You label a bug report or a security vulnerability; Credda reproduces the
+failure, diagnoses the cause, writes the patch, proves it with a test that fails
+before and passes after, and hands back a diff. Opening a pull request is
+opt-in, off by default, and has not yet run against a real repository. It
+proposes. It never merges.
 
 This package is a typed Go client over that engine's HTTP API: read the queue,
 read what a run established, watch a run happen live, and enqueue an
