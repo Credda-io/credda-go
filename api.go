@@ -10,12 +10,18 @@ import (
 // Every method in this file is one route mounted in apps/api/src/app.ts. The
 // path in each doc comment is the literal path the engine serves.
 //
-// All of them are GET except CreateInvestigation. That is not an omission: the
-// API mounts exactly one POST route and no PATCH or DELETE at all. Resolution
-// records are never revised, so the repository has no update method and the
-// route module has no writing route to add one; keys are minted out of band by
-// the operator, because nothing in the engine separates an OWNER from a VIEWER
-// and a key that could mint keys would make every key a key factory.
+// All of them are GET except CreateInvestigation and CancelInvestigation. That
+// is not an omission: the API mounts exactly two POST routes and no PATCH or
+// DELETE at all. Resolution records are never revised, so the repository has no
+// update method and the route module has no writing route to add one; keys are
+// minted out of band by the operator, because nothing in the engine separates
+// an OWNER from a VIEWER and a key that could mint keys would make every key a
+// key factory.
+//
+// Every query parameter and body field these methods send is one the engine's
+// zod schemas declare. That is load-bearing rather than tidy: those schemas are
+// .strict(), so a key they do not define is a 400 CodeValidationFailed naming
+// it, where an unknown one was once accepted and ignored.
 
 // ── investigations ──────────────────────────────────────────────────────────
 
@@ -89,6 +95,61 @@ type CreateInvestigationInput struct {
 func (c *Client) CreateInvestigation(ctx context.Context, in CreateInvestigationInput) (*InvestigationDetail, error) {
 	var out InvestigationDetail
 	if err := c.post(ctx, "/investigations", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// CancelInvestigationInput is the body of CancelInvestigation.
+type CancelInvestigationInput struct {
+	// Reason is recorded against the run. Optional, 1 to 500 characters: the
+	// engine's cancelBody makes it optional because a cancel with nothing said
+	// is still a cancel. An empty string is not sent.
+	Reason string `json:"reason,omitempty"`
+}
+
+// CancelInvestigation stops a run — or records that one has been ASKED to stop,
+// and tells you which of those happened.
+//
+// POST /api/investigations/{id}/cancel
+//
+// A cancel that reported success over a container still cloning a repository,
+// still running a test suite and still spending a model budget would have told
+// an operator something false about their own machine and their own bill. So
+// the route reports what it ACHIEVED, and this method hands that back whole
+// rather than reducing it to an error-or-nil:
+//
+//	c, err := client.CancelInvestigation(ctx, id, credda.CancelInvestigationInput{
+//		Reason: "wrong repository",
+//	})
+//	if err != nil {
+//		return err
+//	}
+//	switch c.Status {
+//	case credda.StatusCancellationRequested:
+//		// A worker is still inside the run. It stops on its next heartbeat and
+//		// writes its own terminal state; watch StreamInvestigation for it.
+//	default:
+//		// c.State is "CANCELLED". Nothing is running.
+//	}
+//
+// A NIL ERROR DOES NOT MEAN THE RUN STOPPED. Both 200 and 202 are successes at
+// the transport level, and only Status separates them. Cancellation.Stopped is
+// the short form of the switch above.
+//
+// Two refusals come back as a 409 *APIError, because neither stopped anything:
+// CodeAlreadyFinished when the run reached a terminal state, and
+// CodeNotCancellable when it is executing outside the job queue.
+//
+// Repeating the call is safe — an already-cancelled run answers
+// StatusAlreadyCancelled rather than an error. It is still never retried under
+// WithRetries, like every non-GET: a repeat that crosses a worker's heartbeat
+// answers a different status than the attempt it replaced, and a retry policy
+// that swallowed that would hand back "cancelled" for a call that was told
+// "requested".
+func (c *Client) CancelInvestigation(ctx context.Context, id string, in CancelInvestigationInput) (*Cancellation, error) {
+	var out Cancellation
+	if err := c.post(ctx, "/investigations/"+esc(id)+"/cancel", in, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

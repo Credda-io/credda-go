@@ -269,3 +269,105 @@ func TestRepositoryLearningsDecodesAnAnchoredLearning(t *testing.T) {
 		t.Errorf("Observations = %d", page.Learnings[0].Observations)
 	}
 }
+
+// ── cancellation ────────────────────────────────────────────────────────────
+//
+// The route reports what it ACHIEVED, and these tests exist because the obvious
+// client is wrong: a nil error from CancelInvestigation does not mean the run
+// stopped. Only Status says that.
+
+// A 202 is a success at the transport level and MUST NOT be readable as
+// "cancelled": a worker is still inside the run, holding a sandbox and possibly
+// spending a model budget, and the API has written no terminal state. The
+// state that comes back is the state the run is STILL IN.
+func TestCancelInvestigationDoesNotReport202AsStopped(t *testing.T) {
+	c, _ := newTestServer(t, 202, `{"investigationId":"inv_1","state":"ATTEMPTING_REPRODUCTION","status":"CANCELLATION_REQUESTED"}`)
+
+	got, err := c.CancelInvestigation(context.Background(), "inv_1", CancelInvestigationInput{})
+	if err != nil {
+		t.Fatalf("CancelInvestigation: %v", err)
+	}
+	if got.Status != StatusCancellationRequested {
+		t.Errorf("Status = %q, want %q", got.Status, StatusCancellationRequested)
+	}
+	if got.Stopped() {
+		t.Error("Stopped() = true for CANCELLATION_REQUESTED; a worker is still inside the run")
+	}
+	if got.State == "CANCELLED" {
+		t.Errorf("State = %q; the API writes no terminal state on 202, the run writes its own", got.State)
+	}
+	if got.State != "ATTEMPTING_REPRODUCTION" {
+		t.Errorf("State = %q, want the state the run is still in", got.State)
+	}
+}
+
+func TestCancelInvestigationReportsAQueuedRunAsStopped(t *testing.T) {
+	c, _ := newTestServer(t, 200, `{"investigationId":"inv_1","state":"CANCELLED","status":"CANCELLED"}`)
+
+	got, err := c.CancelInvestigation(context.Background(), "inv_1", CancelInvestigationInput{Reason: "wrong repository"})
+	if err != nil {
+		t.Fatalf("CancelInvestigation: %v", err)
+	}
+	if got.Status != StatusCancelled || !got.Stopped() {
+		t.Errorf("Status = %q, Stopped() = %v; want CANCELLED and true", got.Status, got.Stopped())
+	}
+	if got.InvestigationID != "inv_1" || got.State != "CANCELLED" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+// Repeating the call is not an error, and is still stopped.
+func TestCancelInvestigationIsIdempotent(t *testing.T) {
+	c, _ := newTestServer(t, 200, `{"investigationId":"inv_1","state":"CANCELLED","status":"ALREADY_CANCELLED"}`)
+
+	got, err := c.CancelInvestigation(context.Background(), "inv_1", CancelInvestigationInput{})
+	if err != nil {
+		t.Fatalf("CancelInvestigation: %v", err)
+	}
+	if got.Status != StatusAlreadyCancelled || !got.Stopped() {
+		t.Errorf("Status = %q, Stopped() = %v; want ALREADY_CANCELLED and true", got.Status, got.Stopped())
+	}
+}
+
+// The two refusals are errors, because neither stopped anything. Their codes
+// are the whole message: one says there is nothing left to stop, the other says
+// this API cannot reach what is running.
+func TestCancelInvestigationSurfacesTheTwoRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		code string
+		body string
+	}{
+		{CodeAlreadyFinished, `{"error":{"code":"ALREADY_FINISHED","message":"Investigation inv_1 already finished in VERIFIED"}}`},
+		{CodeNotCancellable, `{"error":{"code":"NOT_CANCELLABLE","message":"Investigation inv_1 is running outside the job queue and cannot be stopped through this API"}}`},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			c, _ := newTestServer(t, 409, tc.body)
+			got, err := c.CancelInvestigation(context.Background(), "inv_1", CancelInvestigationInput{})
+			if got != nil {
+				t.Errorf("got = %+v, want nil", got)
+			}
+			apiErr, ok := AsAPIError(err)
+			if !ok {
+				t.Fatalf("err = %v, want *APIError", err)
+			}
+			if apiErr.StatusCode != 409 || apiErr.Code != tc.code {
+				t.Errorf("status = %d, code = %q; want 409 and %q", apiErr.StatusCode, apiErr.Code, tc.code)
+			}
+		})
+	}
+}
+
+// Never repeated, whatever WithRetries says: see the doc comment on
+// CancelInvestigation.
+func TestCancelInvestigationIsNotRetried(t *testing.T) {
+	c, got := newTestServer(t, 503, `{"error":{"code":"UNAVAILABLE","message":"down"}}`)
+	c.retries = 3
+	c.retryBase = 0
+
+	if _, err := c.CancelInvestigation(context.Background(), "inv_1", CancelInvestigationInput{}); err == nil {
+		t.Fatal("want an error")
+	}
+	if got.Calls != 1 {
+		t.Errorf("calls = %d, want 1", got.Calls)
+	}
+}

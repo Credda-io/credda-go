@@ -138,8 +138,13 @@ there is no route here that mints or revokes a key.
 ## What this client can do
 
 Every method is one route the engine actually mounts. All of them are `GET`
-except `CreateInvestigation` — the API mounts exactly one `POST` and no `PATCH`
-or `DELETE` at all.
+except `CreateInvestigation` and `CancelInvestigation` — the API mounts exactly
+two `POST` routes and no `PATCH` or `DELETE` at all.
+
+Every query parameter and body field this client sends is one the engine's
+schemas declare, which is load-bearing rather than tidy: those schemas reject a
+key they do not define with a **400 `VALIDATION_FAILED`** naming it, where an
+unknown one used to be accepted and ignored.
 
 ### Investigations
 
@@ -147,10 +152,45 @@ or `DELETE` at all.
 | --- | --- |
 | `ListInvestigations` | `GET /api/investigations` |
 | `CreateInvestigation` | `POST /api/investigations` |
+| `CancelInvestigation` | `POST /api/investigations/{id}/cancel` |
 | `GetInvestigation` | `GET /api/investigations/{id}` |
 | `InvestigationEvents` | `GET /api/investigations/{id}/events` |
 | `InvestigationEvidence` | `GET /api/investigations/{id}/evidence` |
 | `StreamInvestigation` | `GET /api/investigations/{id}/stream` (SSE) |
+
+#### Stopping a run
+
+`CancelInvestigation` answers with what it **achieved**, and a `nil` error does
+**not** mean the run stopped. Switch on `Status`:
+
+| `Status` | HTTP | What is true |
+| --- | --- | --- |
+| `StatusCancelled` | 200 | The job was still queued and was refused its claim. **Nothing is running.** `State` is `CANCELLED`. |
+| `StatusAlreadyCancelled` | 200 | It was already cancelled. Repeating the call is not an error. |
+| `StatusCancellationRequested` | 202 | A worker is **inside** the run, holding a sandbox and possibly a model call. The request is durable and that worker honours it on its next heartbeat — but the run **has not stopped**, and the API writes no terminal state here. The run writes its own when it lets go; the event stream is how you learn that it did. |
+
+```go
+c, err := client.CancelInvestigation(ctx, id, credda.CancelInvestigationInput{
+        Reason: "wrong repository",
+})
+if err != nil {
+        return err
+}
+if c.Status == credda.StatusCancellationRequested {
+        // Still running. Watch for the terminal state the run writes itself.
+}
+```
+
+`Cancellation.Stopped()` is the short form. `Status` is a named type with
+exported constants rather than a `bool` or a bare string, so a caller cannot
+write `if c.Cancelled` and cannot compare against a literal that silently never
+matches.
+
+Two refusals come back as a 409 `*APIError`, because neither stopped anything:
+`ALREADY_FINISHED` — the run reached a terminal state, so there is nothing to
+stop and nothing to undo — and `NOT_CANCELLABLE` — the run is executing outside
+the job queue, which is what `credda run` does, so the API cannot reach it and
+will not pretend it did.
 
 ### Repositories
 
@@ -196,9 +236,11 @@ or `DELETE` at all.
 Nothing in this package invents an endpoint, a field, a parameter or a
 behaviour. If the engine does not serve it, it is not here. In particular:
 
-- **No method starts, cancels or advances a run.** `CreateInvestigation` writes
-  a row in state `CREATED` and returns; execution is driven by the engine's
-  worker, and the API exposes no route for it.
+- **No method starts or advances a run.** `CreateInvestigation` writes a row in
+  state `CREATED` and returns; execution is driven by the engine's worker, and
+  the API exposes no route for it. Stopping one is the exception, and only
+  because the engine grew a route for it on 2026-08-29 — and even that route
+  cannot stop a run the job queue does not own.
 - **No method creates a validation, a patch, or a pull request.** Those are the
   worker's, and the API has no route for them.
 - **No method mints or revokes an API key.** The API has none. Nothing in the
@@ -359,8 +401,12 @@ stack traces and SQL text never cross the boundary — and the `X-Request-Id` is
 the only thing that finds the failure in the engine's logs.
 
 Codes: `INVALID_REQUEST`, `VALIDATION_FAILED`, `NOT_FOUND`, `NO_ORGANIZATION`,
-`PAYLOAD_TOO_LARGE`, `UNAUTHENTICATED`, `TOO_MANY_STREAMS`, `UNAVAILABLE`,
-`INTERNAL_ERROR`. Each is a `Code*` constant.
+`ALREADY_FINISHED`, `NOT_CANCELLABLE`, `PAYLOAD_TOO_LARGE`, `UNAUTHENTICATED`,
+`TOO_MANY_STREAMS`, `UNAVAILABLE`, `INTERNAL_ERROR`. Each is a `Code*` constant.
+`ALREADY_FINISHED` and `NOT_CANCELLABLE` are the cancel route's and appear
+nowhere else. `UNAVAILABLE` is the one no response can actually carry — it is a
+default every call site in the engine overrides — and it is a constant only so
+that removing an exported name does not break a build.
 
 `GetHealth` is the one method that returns **both** a value and an error: a
 degraded engine answers 503 *and* names the check that failed, and throwing the

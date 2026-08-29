@@ -429,6 +429,64 @@ type InvestigationDetail struct {
 	LatestSequence int `json:"latestSequence"`
 }
 
+// CancellationStatus is what CancelInvestigation ACHIEVED. It is a named type
+// with exported constants rather than a bool or a plain string for one reason:
+// a caller cannot write `if c.Cancelled`, and cannot compare against a
+// misspelled literal that silently never matches. Two of the three values are
+// HTTP 200 and one is 202, and they do not mean the same thing about the
+// operator's machine or the operator's bill.
+type CancellationStatus string
+
+const (
+	// StatusCancelled (HTTP 200) means the run had not started. The job was
+	// still queued, one conditional UPDATE refused it the claim under the same
+	// write lock the claim takes, and the record is now CANCELLED. NOTHING IS
+	// RUNNING.
+	StatusCancelled CancellationStatus = "CANCELLED"
+	// StatusCancellationRequested (HTTP 202) means a worker is INSIDE the run,
+	// holding a sandbox and possibly a model call. The request is durable and
+	// that worker honours it on the heartbeat it already performs — but the run
+	// HAS NOT STOPPED, and the API has written no terminal state. The run
+	// writes its own when it lets go. InvestigationEvents and
+	// StreamInvestigation are how a caller learns that it did.
+	//
+	// Rendering this as "cancelled" tells an operator something false about a
+	// container that is still cloning and a budget that is still being spent.
+	StatusCancellationRequested CancellationStatus = "CANCELLATION_REQUESTED"
+	// StatusAlreadyCancelled (HTTP 200) means it was cancelled before this
+	// call. Repeating the request is not an error.
+	StatusAlreadyCancelled CancellationStatus = "ALREADY_CANCELLED"
+)
+
+// Cancellation is the CancelInvestigation response.
+//
+// The two refusals are NOT values here. A run that already finished is a 409
+// APIError with CodeAlreadyFinished, and one executing outside the job queue —
+// which is what `credda run` does — is a 409 with CodeNotCancellable. Both are
+// errors because neither stopped anything.
+type Cancellation struct {
+	InvestigationID string `json:"investigationId"`
+	// State is the record's state, re-read after the write rather than assumed.
+	//
+	// It is "CANCELLED" only when Status is StatusCancelled or
+	// StatusAlreadyCancelled. On StatusCancellationRequested this is the state
+	// the run is STILL IN, because the API does not write CANCELLED there.
+	State string `json:"state"`
+	// Status is what was achieved. Switch on it. Do not treat a nil error as
+	// "stopped".
+	Status CancellationStatus `json:"status"`
+}
+
+// Stopped reports whether the run is actually stopped: true for
+// StatusCancelled and StatusAlreadyCancelled, false for
+// StatusCancellationRequested.
+//
+// A convenience over the switch, not a substitute for reading Status — "why is
+// it not stopped" is answered by the constant and not by a false.
+func (c Cancellation) Stopped() bool {
+	return c.Status == StatusCancelled || c.Status == StatusAlreadyCancelled
+}
+
 // EventPage is the InvestigationEvents response.
 type EventPage struct {
 	Events []Event `json:"events"`

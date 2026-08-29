@@ -11,9 +11,11 @@ import (
 )
 
 // Error codes the engine sends. These are the values of `error.code` in an
-// error body, taken from apps/api/src/errors.ts, auth.ts, organization.ts and
-// stream.ts. There is no published catalogue route; this is the set the source
-// constructs.
+// error body, taken from apps/api/src/errors.ts, auth.ts, organization.ts,
+// stream.ts and routes/investigations.ts, and cross-checked against ERROR_CODES
+// in apps/api/src/openapi.ts, which that repository's own test proves is the
+// REACHABLE set rather than the declared one. There is no published catalogue
+// route; this is the set the source constructs.
 const (
 	// CodeInvalidRequest is a 400 for a malformed request.
 	CodeInvalidRequest = "INVALID_REQUEST"
@@ -30,7 +32,16 @@ const (
 	// deployment did not ask for credentials. What is missing is the resource
 	// "the current organisation", which does not exist for such a request.
 	CodeNoOrganization = "NO_ORGANIZATION"
-	// CodePayloadTooLarge is the 413 for a CreateInvestigation body over 256KB.
+	// CodeAlreadyFinished is the 409 CancelInvestigation answers when the run
+	// already reached a terminal state: there is nothing to stop, and nothing
+	// to undo. Only on the cancel route.
+	CodeAlreadyFinished = "ALREADY_FINISHED"
+	// CodeNotCancellable is the 409 CancelInvestigation answers when the run is
+	// executing outside the job queue — `credda run` runs the engine in its own
+	// process against the same database — so this API has no way to reach it
+	// and will not pretend otherwise. Only on the cancel route.
+	CodeNotCancellable = "NOT_CANCELLABLE"
+	// CodePayloadTooLarge is the 413 for a request body over 256KB.
 	CodePayloadTooLarge = "PAYLOAD_TOO_LARGE"
 	// CodeUnauthenticated is the 401 from the auth gate: no bearer token, or a
 	// token that verifies against no live key.
@@ -39,6 +50,12 @@ const (
 	// concurrent event streams. Transient, and retried when WithRetries is on.
 	CodeTooManyStreams = "TOO_MANY_STREAMS"
 	// CodeUnavailable is a 503 for a dependency that could not answer.
+	//
+	// No response can actually carry it: it is the default second argument of
+	// unavailable() in apps/api/src/errors.ts and every call site passes its
+	// own code over it. Kept because removing an exported constant breaks a
+	// build for no gain, and said here so it is not read as something to
+	// branch on.
 	CodeUnavailable = "UNAVAILABLE"
 	// CodeInternalError is the opaque 500. The engine logs the real failure
 	// server-side and sends nothing back, so stack traces and SQL text never

@@ -31,6 +31,13 @@ import (
 // source of truth, which catches the failure that matters — a client drifting
 // from the API — in both languages.
 //
+// Both tables share one weakness, and it is worth naming rather than implying:
+// a route the ENGINE gains fails neither of them. POST /api/investigations/
+// {id}/cancel shipped in core on 2026-08-29 and both suites stayed green with
+// no method for it. credda-js now lists every route the engine mounts,
+// including the ones it does not wrap, and pins the count, so the omission is
+// at least readable; this table still lists only what this client calls.
+//
 // What that does NOT catch is the two of us reading the same route and
 // disagreeing about it. Nothing here can: the two suites hold two hand-written
 // tables, and a shared misreading agrees with itself. The honest form is one
@@ -63,6 +70,33 @@ func TestRequestShapes(t *testing.T) {
 			},
 			wantMethod: http.MethodGet,
 			wantPath:   "/api/investigations",
+		},
+		{
+			name:     "CancelInvestigation, no reason",
+			route:    "routes/investigations.ts app.post('/:id/cancel')",
+			response: `{"investigationId":"inv_1","state":"CANCELLED","status":"CANCELLED"}`,
+			call: func(c *Client) error {
+				_, err := c.CancelInvestigation(context.Background(), "inv_1", CancelInvestigationInput{})
+				return err
+			},
+			wantMethod: http.MethodPost,
+			wantPath:   "/api/investigations/inv_1/cancel",
+			// `{}`, not `{"reason":""}`: cancelBody is strict and requires 1 to
+			// 500 characters when reason is present, so an empty string would
+			// be a 400 for a caller who simply said nothing.
+			wantBody: `{}`,
+		},
+		{
+			name:     "CancelInvestigation with a reason",
+			route:    "routes/investigations.ts cancelBody",
+			response: `{"investigationId":"inv_1","state":"CANCELLED","status":"CANCELLED"}`,
+			call: func(c *Client) error {
+				_, err := c.CancelInvestigation(context.Background(), "inv_1", CancelInvestigationInput{Reason: "wrong repository"})
+				return err
+			},
+			wantMethod: http.MethodPost,
+			wantPath:   "/api/investigations/inv_1/cancel",
+			wantBody:   `{"reason":"wrong repository"}`,
 		},
 		{
 			name:     "ListInvestigations with state and paging",
