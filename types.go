@@ -429,6 +429,55 @@ type InvestigationDetail struct {
 	LatestSequence int `json:"latestSequence"`
 }
 
+// CreationStatus is what CreateInvestigationOnce ACHIEVED: whether THIS call
+// opened the run, or whether an earlier request under the same key did.
+//
+// A named type with constants rather than a bool, for the reason
+// CancellationStatus is one. The engine answers the create route with 201 when
+// the key was new and 200 when it is handing back a run it already has, and the
+// BODY IS IDENTICAL either way — so this is the only thing that says whether a
+// model budget was just committed. A shape that dropped it would make every
+// retried create look like a fresh run in whatever the caller writes to their
+// own ledger.
+type CreationStatus string
+
+const (
+	// StatusCreated (HTTP 201) means this request opened the run. Nothing under
+	// this key had reached the engine before it.
+	StatusCreated CreationStatus = "CREATED"
+	// StatusReplayed (HTTP 200) means an earlier request under the same key
+	// opened the run and this one is being handed that same run back. NOTHING
+	// WAS CREATED HERE AND NOTHING WAS BILLED — which is the point: it is what
+	// a retried create answers once the first attempt got through.
+	StatusReplayed CreationStatus = "REPLAYED"
+)
+
+// InvestigationCreation is the CreateInvestigationOnce result.
+//
+// It is assembled by this client from a response body and its status line, and
+// is the one type in this file that is not a transcription of a serializer: the
+// engine writes nothing in the body that separates 201 from 200.
+//
+// The refusal is not a value here. The same key over a DIFFERENT body is a 409
+// APIError with CodeIdempotencyKeyReused, disclosing neither run, because it
+// neither created nor replayed anything.
+type InvestigationCreation struct {
+	// Detail is the run, in the same shape GetInvestigation returns.
+	Detail *InvestigationDetail
+	// Status is what was achieved. Switch on it before recording that a run was
+	// opened. Do not treat a nil error as "created".
+	Status CreationStatus
+	// Key is the key the run is claimed under. Sending it again with the same
+	// body returns this same run.
+	Key IdempotencyKey
+}
+
+// Opened reports whether THIS call opened the run: true for StatusCreated,
+// false for StatusReplayed.
+//
+// A convenience over the switch, not a substitute for reading Status.
+func (c InvestigationCreation) Opened() bool { return c.Status == StatusCreated }
+
 // CancellationStatus is what CancelInvestigation ACHIEVED. It is a named type
 // with exported constants rather than a bool or a plain string for one reason:
 // a caller cannot write `if c.Cancelled`, and cannot compare against a

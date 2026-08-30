@@ -13,10 +13,14 @@
 //
 // # What this client can do
 //
-// The surface is read-mostly, because the API is. There is exactly one write:
-// CreateInvestigation, which enqueues an investigation in state CREATED.
-// Execution is driven by the engine's worker, not by the API, so there is no
-// method here that starts, cancels, or advances a run, and none that creates a
+// The surface is read-mostly, because the API is. There are two writes.
+// CreateInvestigation enqueues an investigation in state CREATED —
+// CreateInvestigationOnce is the same route under an Idempotency-Key, which is
+// what makes a retried create safe to bill for. CancelInvestigation stops a run,
+// and says whether it actually stopped it or only asked.
+//
+// Execution itself is driven by the engine's worker, not by the API, so there is
+// no method here that starts or advances a run, and none that creates a
 // validation, a patch, or a pull request. Those are the worker's, and the API
 // exposes no route for them.
 //
@@ -110,11 +114,17 @@ func WithHTTPClient(hc *http.Client) Option {
 // errors, and 429/502/503/504. n is the number of re-attempts; 0 (the default)
 // is off.
 //
-// Applied to GETs only. Every GET on this API is a read and repeating one
-// changes nothing. CreateInvestigation is never retried: the API accepts no
-// idempotency key, so a repeated POST would enqueue a second investigation for
-// the same report, and two runs against one issue is not a thing this client
-// will cause on its own.
+// Applied to every GET, and to the one write that carries an idempotency key.
+// A GET is a read and repeating one changes nothing. CreateInvestigationOnce
+// sends an Idempotency-Key, under which the engine returns the run the first
+// attempt created rather than opening — and billing for — a second, so a repeat
+// of it is exactly-once at the server.
+//
+// CreateInvestigation and CancelInvestigation are never retried. The first
+// sends no key, so without the header the route does what it always did, one
+// run per request; the second is idempotent at the server but answers a
+// different status when a repeat crosses a worker's heartbeat, and a retry that
+// swallowed that would report "cancelled" for a call that was told "requested".
 //
 // Backoff is 300ms doubling per attempt, or the server's own Retry-After when
 // one was sent, capped at 5s either way. Tune with WithRetryBackoff.
@@ -169,11 +179,22 @@ type requestOptions struct {
 	accept   string
 	// raw suppresses JSON decoding; the caller is handed the response instead.
 	raw bool
+	// idempotencyKey, when set, is sent as the Idempotency-Key header and is
+	// what makes a POST repeatable. It is set by exactly one call site,
+	// postOnce, which cannot be reached without an IdempotentCreate.
+	idempotencyKey IdempotencyKey
 }
 
 // safeToRepeat reports whether repeating this request can only ever be
-// exactly-once. GETs, and nothing else: see WithRetries.
-func (ro requestOptions) safeToRepeat() bool { return ro.method == http.MethodGet }
+// exactly-once. A GET, or a request carrying an idempotency key the engine
+// deduplicates against: see WithRetries.
+//
+// The key is the whole condition for a non-GET, which is why it lives on the
+// request rather than beside it. There is no flag here meaning "retry anyway",
+// so a write that would be repeated without a key cannot be expressed.
+func (ro requestOptions) safeToRepeat() bool {
+	return ro.method == http.MethodGet || ro.idempotencyKey != ""
+}
 
 // retryable decides whether err is worth repeating. A non-APIError is a
 // transport failure, which is. An APIError is when the status is transient:
@@ -282,6 +303,9 @@ func (c *Client) attempt(ctx context.Context, ro requestOptions, encoded []byte,
 	if ro.accept != "" {
 		req.Header.Set("Accept", ro.accept)
 	}
+	if ro.idempotencyKey != "" {
+		req.Header.Set(IdempotencyHeader, string(ro.idempotencyKey))
+	}
 	for k, v := range ro.headers {
 		req.Header.Set(k, v)
 	}
@@ -331,6 +355,26 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 
 func (c *Client) post(ctx context.Context, path string, body, out any) error {
 	return c.do(ctx, requestOptions{method: http.MethodPost, path: path, body: body}, out)
+}
+
+// postOnce is the only retrying write on this client. The key is a required
+// parameter rather than a field somebody may leave zero, so "retried" and
+// "carries a key" cannot come apart.
+//
+// It returns the response status because the create route answers 201 for a run
+// it opened and 200 for one it is handing back, and the bodies are identical:
+// collapsing that is the caller's decision to make, not this transport's.
+func (c *Client) postOnce(ctx context.Context, path string, key IdempotencyKey, body, out any) (int, error) {
+	resp, err := c.doRaw(ctx, requestOptions{
+		method:         http.MethodPost,
+		path:           path,
+		body:           body,
+		idempotencyKey: key,
+	}, out)
+	if err != nil {
+		return 0, err
+	}
+	return resp.StatusCode, nil
 }
 
 // ── query building ──────────────────────────────────────────────────────────

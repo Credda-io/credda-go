@@ -138,7 +138,8 @@ there is no route here that mints or revokes a key.
 ## What this client can do
 
 Every method is one route the engine actually mounts. All of them are `GET`
-except `CreateInvestigation` and `CancelInvestigation` — the API mounts exactly
+except `CreateInvestigation`, `CreateInvestigationOnce` (the same route under an
+idempotency key) and `CancelInvestigation` — the API mounts exactly
 two `POST` routes and no `PATCH` or `DELETE` at all.
 
 Every query parameter and body field this client sends is one the engine's
@@ -152,6 +153,7 @@ unknown one used to be accepted and ignored.
 | --- | --- |
 | `ListInvestigations` | `GET /api/investigations` |
 | `CreateInvestigation` | `POST /api/investigations` |
+| `CreateInvestigationOnce` | `POST /api/investigations`, with `Idempotency-Key` |
 | `CancelInvestigation` | `POST /api/investigations/{id}/cancel` |
 | `GetInvestigation` | `GET /api/investigations/{id}` |
 | `InvestigationEvents` | `GET /api/investigations/{id}/events` |
@@ -270,8 +272,60 @@ detail, err := c.CreateInvestigation(ctx, credda.CreateInvestigationInput{
 ```
 
 The body must be under 256KB or the engine refuses it unread with a 413. This
-call is **never retried**, even with `WithRetries` on: the API accepts no
-idempotency key, so a repeat would enqueue a second run against the same report.
+call sends no idempotency key and is **never retried**, even with `WithRetries`
+on: with no header the route does exactly what it always did, one run per
+request, so a repeat would enqueue a second run against the same report.
+
+### Enqueue one you can safely send twice
+
+Opening an investigation commits a model budget, so a create repeated because a
+socket died is a second bill. The route reads an **`Idempotency-Key`**:
+
+| | HTTP | What is true |
+| --- | --- | --- |
+| First request | 201 → `StatusCreated` | A run was opened. |
+| The same body again | 200 → `StatusReplayed` | The same run, returned again. **Nothing was created and nothing was billed.** |
+| A **different** body | 409 `IDEMPOTENCY_KEY_REUSED` | Refused, and neither run is disclosed. Mint a new key for a new report. |
+| No header at all | 201 | Exactly the old behaviour: one run per request. |
+
+The claim is scoped to your organisation and never expires; it is deleted with
+the investigation.
+
+```go
+req, err := credda.NewIdempotentCreate(credda.CreateInvestigationInput{
+	RepositoryID: "repo_1",
+	IssueTitle:   "Checkout returns 500 on submit",
+	IssueBody:    report,
+})
+if err != nil {
+	return err
+}
+if err := jobs.Record(ticketID, req.Key()); err != nil { // so a restart re-sends it
+	return err
+}
+
+created, err := c.CreateInvestigationOnce(ctx, req)
+if err != nil {
+	return err
+}
+if created.Opened() {
+	// This call opened the run.
+} else {
+	// StatusReplayed: an earlier attempt of ours got through. Nothing was billed.
+}
+```
+
+`NewIdempotentCreate` mints the key and binds it to that body; the fields are
+unexported, so a key cannot drift onto a report it does not stand for, and a new
+report gets a new key. `IdempotentCreateWithKey` is for the other direction — a
+restarted process re-sending a request under the key it recorded.
+
+**This package never mints a key behind `CreateInvestigation`.** A key asserts
+that two requests are one intent, and the engine's own handler is explicit that
+only the caller knows that: re-running one report against a non-deterministic
+engine is a real thing to want, and a body-derived key would make it impossible.
+A key this library invented per call could also not be sent again by the process
+that crashed and restarted — the case that actually double-bills.
 
 ### Watch it happen
 
@@ -401,10 +455,11 @@ stack traces and SQL text never cross the boundary — and the `X-Request-Id` is
 the only thing that finds the failure in the engine's logs.
 
 Codes: `INVALID_REQUEST`, `VALIDATION_FAILED`, `NOT_FOUND`, `NO_ORGANIZATION`,
-`ALREADY_FINISHED`, `NOT_CANCELLABLE`, `PAYLOAD_TOO_LARGE`, `UNAUTHENTICATED`,
-`TOO_MANY_STREAMS`, `UNAVAILABLE`, `INTERNAL_ERROR`. Each is a `Code*` constant.
-`ALREADY_FINISHED` and `NOT_CANCELLABLE` are the cancel route's and appear
-nowhere else. `UNAVAILABLE` is the one no response can actually carry — it is a
+`ALREADY_FINISHED`, `NOT_CANCELLABLE`, `IDEMPOTENCY_KEY_REUSED`,
+`PAYLOAD_TOO_LARGE`, `UNAUTHENTICATED`, `TOO_MANY_STREAMS`, `UNAVAILABLE`,
+`INTERNAL_ERROR`. Each is a `Code*` constant. `ALREADY_FINISHED` and
+`NOT_CANCELLABLE` are the cancel route's and `IDEMPOTENCY_KEY_REUSED` is the
+create route's, and they appear nowhere else. `UNAVAILABLE` is the one no response can actually carry — it is a
 default every call site in the engine overrides — and it is a constant only so
 that removing an exported name does not break a build.
 
@@ -414,10 +469,15 @@ body away would force a second request for what you already asked.
 
 ### Retries
 
-Off by default. `WithRetries(n)` retries network errors and 429/502/503/504 —
-on `GET` only. Backoff doubles from 300ms, capped at 5s, and the server's
-`Retry-After` wins when one is sent. A cancelled context interrupts the wait,
-not just the request.
+Off by default. `WithRetries(n)` retries network errors and 429/502/503/504 on
+every `GET`, and on exactly one write: `CreateInvestigationOnce`, which carries
+an `Idempotency-Key` the engine deduplicates against, so a repeat returns the run
+the first attempt opened rather than opening a second. `CreateInvestigation` and
+`CancelInvestigation` are never retried — the first carries no key, and the
+second answers a different status when a repeat crosses a worker's heartbeat.
+
+Backoff doubles from 300ms, capped at 5s, and the server's `Retry-After` wins
+when one is sent. A cancelled context interrupts the wait, not just the request.
 
 ## Versioning
 

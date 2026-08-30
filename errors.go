@@ -41,6 +41,12 @@ const (
 	// process against the same database — so this API has no way to reach it
 	// and will not pretend otherwise. Only on the cancel route.
 	CodeNotCancellable = "NOT_CANCELLABLE"
+	// CodeIdempotencyKeyReused is the 409 CreateInvestigationOnce answers when
+	// the Idempotency-Key on the request already stands for a DIFFERENT body.
+	// Neither run is disclosed: the earlier one would answer a question this
+	// caller never asked, and a new one is the duplicate the key was sent to
+	// prevent. Mint a new key for a new report.
+	CodeIdempotencyKeyReused = "IDEMPOTENCY_KEY_REUSED"
 	// CodePayloadTooLarge is the 413 for a request body over 256KB.
 	CodePayloadTooLarge = "PAYLOAD_TOO_LARGE"
 	// CodeUnauthenticated is the 401 from the auth gate: no bearer token, or a

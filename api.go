@@ -3,6 +3,7 @@ package credda
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 )
@@ -10,9 +11,10 @@ import (
 // Every method in this file is one route mounted in apps/api/src/app.ts. The
 // path in each doc comment is the literal path the engine serves.
 //
-// All of them are GET except CreateInvestigation and CancelInvestigation. That
-// is not an omission: the API mounts exactly two POST routes and no PATCH or
-// DELETE at all. Resolution records are never revised, so the repository has no
+// All of them are GET except CreateInvestigation, CreateInvestigationOnce (the
+// same route, under an idempotency key) and CancelInvestigation. That is not an
+// omission: the API mounts exactly two POST routes and no PATCH or DELETE at
+// all. Resolution records are never revised, so the repository has no
 // update method and the route module has no writing route to add one; keys are
 // minted out of band by the operator, because nothing in the engine separates
 // an OWNER from a VIEWER and a key that could mint keys would make every key a
@@ -88,16 +90,81 @@ type CreateInvestigationInput struct {
 // has no events, no evidence and no outcome; watch Stream or poll
 // InvestigationEvents for what happens next.
 //
-// This call is never retried, even with WithRetries: the API accepts no
-// idempotency key, so a repeat would enqueue a second run against the same
-// report. The whole request body must be under 256KB or the engine refuses it
-// unread with a 413.
+// This call sends no Idempotency-Key and is never retried, even with
+// WithRetries. Without that header the route behaves exactly as it did before
+// the header existed — one run per request — so a repeat opens, and bills for, a
+// second investigation into the same report. That is the right default for a
+// caller who has not said two requests are one intent, and it is not the call to
+// make from a job queue that will retry you: use CreateInvestigationOnce.
+//
+// The whole request body must be under 256KB or the engine refuses it unread
+// with a 413.
 func (c *Client) CreateInvestigation(ctx context.Context, in CreateInvestigationInput) (*InvestigationDetail, error) {
 	var out InvestigationDetail
 	if err := c.post(ctx, "/investigations", in, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
+}
+
+// CreateInvestigationOnce enqueues an investigation under an idempotency key —
+// the one write on this client that WithRetries will repeat.
+//
+// POST /api/investigations, with an Idempotency-Key header.
+//
+// Running an investigation spends a model budget, so a create sent twice because
+// a socket died is a second bill. Under a key the engine returns the run the
+// first request created, with 200 instead of 201, so repeating this call is
+// exactly-once at the server and retrying it is safe.
+//
+//	req, err := credda.NewIdempotentCreate(credda.CreateInvestigationInput{
+//		RepositoryID: repoID, IssueTitle: title, IssueBody: report,
+//	})
+//	if err != nil {
+//		return err
+//	}
+//	if err := jobs.Record(ticketID, req.Key()); err != nil {
+//		return err
+//	}
+//	created, err := client.CreateInvestigationOnce(ctx, req)
+//	if err != nil {
+//		return err
+//	}
+//	if created.Opened() {
+//		// A run just opened, and a budget with it.
+//	}
+//	// Otherwise StatusReplayed: an earlier attempt of ours got through. Nothing
+//	// was created here and nothing was billed.
+//
+// A NIL ERROR DOES NOT MEAN A RUN WAS OPENED. Both 201 and 200 are successes,
+// and only Status separates them.
+//
+// The key and the body arrive together, in one IdempotentCreate, because the
+// engine's other answer is a refusal: the same key over a DIFFERENT body is a
+// 409 *APIError with CodeIdempotencyKeyReused, disclosing neither run. Making
+// the pair as a unit is what keeps a key from drifting onto a report it was not
+// minted for; there is no overload here taking the two separately, and the zero
+// IdempotentCreate is refused rather than sent without a header.
+//
+// The claim is scoped to the organisation the API key names and never expires.
+// It is deleted when the investigation is.
+func (c *Client) CreateInvestigationOnce(ctx context.Context, req IdempotentCreate) (*InvestigationCreation, error) {
+	if req.key == "" {
+		return nil, fmt.Errorf("%w: build the request with NewIdempotentCreate", ErrInvalidIdempotencyKey)
+	}
+	var out InvestigationDetail
+	status, err := c.postOnce(ctx, "/investigations", req.key, req.input, &out)
+	if err != nil {
+		return nil, err
+	}
+	// 201 is the run this request opened; every other success on this route is
+	// the engine handing back one it already had. Read off the status line,
+	// because the two bodies are identical.
+	result := &InvestigationCreation{Detail: &out, Status: StatusReplayed, Key: req.key}
+	if status == http.StatusCreated {
+		result.Status = StatusCreated
+	}
+	return result, nil
 }
 
 // CancelInvestigationInput is the body of CancelInvestigation.
