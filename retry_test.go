@@ -221,3 +221,43 @@ func TestContextCancellationInterruptsTheBackoff(t *testing.T) {
 		t.Errorf("waited %v after the context was done", elapsed)
 	}
 }
+
+// TestHealthIsNeverRetried pins the one GET that opts out of the retry policy.
+//
+// 503 is retryable in general because it is what the engine answers for
+// UNAVAILABLE and TOO_MANY_STREAMS, both of which pass. On /api/health it is
+// not a blip: a readiness check failed, the body says which, and repeating the
+// question returns the same report after however much backoff was configured.
+//
+// This client retried it until 2026-08-31. @credda/js has excluded the route
+// since its own rewrite and says so in its README, so the two clients gave a
+// caller different latency for the same degraded engine, with the reasoning
+// written down on only one side.
+func TestHealthIsNeverRetried(t *testing.T) {
+	srv, calls := statusServer(t, "", 503, 200)
+	c := fastRetryClient(srv.URL, 3)
+
+	readiness, err := c.GetHealth(context.Background())
+	if err == nil {
+		t.Fatal("want the 503 to surface rather than being retried into the 200 behind it")
+	}
+	if got := atomic.LoadInt32(calls); got != 1 {
+		t.Errorf("calls = %d, want 1; a degraded database does not recover by being asked again", got)
+	}
+	// The readiness body still comes back beside the error: that contract is
+	// what GetHealth exists for and is unaffected by not retrying.
+	if readiness != nil {
+		t.Errorf("readiness = %+v, want nil for a body statusServer does not shape as one", readiness)
+	}
+}
+
+// The opt-out is scoped to health and does not leak into the policy generally.
+func TestOtherGETsStillRetryA503(t *testing.T) {
+	srv, calls := statusServer(t, "", 503, 200)
+	if _, err := fastRetryClient(srv.URL, 3).ListInvestigations(context.Background(), nil); err != nil {
+		t.Fatalf("ListInvestigations: %v", err)
+	}
+	if got := atomic.LoadInt32(calls); got != 2 {
+		t.Errorf("calls = %d, want 2", got)
+	}
+}

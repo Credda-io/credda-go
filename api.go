@@ -447,9 +447,18 @@ func (c *Client) OrganizationKeys(ctx context.Context, p *Page) (*APIKeyPage, er
 //
 // This route is behind the auth gate, because it names the schema version and
 // what was checked. Liveness is not: see Livez.
+//
+// NEVER RETRIED, whatever WithRetries was set to. 503 is on the retryable list
+// because it is what the engine answers for UNAVAILABLE and TOO_MANY_STREAMS,
+// which are blips. Here it is not a blip, it is the answer: a readiness check
+// failed, and the body says which. Asking a degraded database three more times
+// on a rising backoff returns the same report a few seconds later, which is the
+// one thing a caller reaching for a health check cannot afford. @credda/js has
+// held this route out of its retry policy since its own rewrite; this client
+// retried it, and the difference was an oversight rather than a decision.
 func (c *Client) GetHealth(ctx context.Context) (*Readiness, error) {
 	var out Readiness
-	err := c.get(ctx, "/health", &out)
+	err := c.do(ctx, requestOptions{method: http.MethodGet, path: "/health", noRetry: true}, &out)
 	if err == nil {
 		return &out, nil
 	}

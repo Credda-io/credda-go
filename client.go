@@ -169,11 +169,19 @@ type requestOptions struct {
 	accept   string
 	// raw suppresses JSON decoding; the caller is handed the response instead.
 	raw bool
+	// noRetry opts a GET out of the retry policy even when one is configured.
+	// Exactly one route sets it; see GetHealth.
+	noRetry bool
 }
 
 // safeToRepeat reports whether repeating this request can only ever be
 // exactly-once. GETs, and nothing else: see WithRetries.
-func (ro requestOptions) safeToRepeat() bool { return ro.method == http.MethodGet }
+//
+// noRetry is a separate question from safety. A route may set it because
+// repeating the request is pointless rather than because it is unsafe.
+func (ro requestOptions) safeToRepeat() bool {
+	return ro.method == http.MethodGet && !ro.noRetry
+}
 
 // retryable decides whether err is worth repeating. A non-APIError is a
 // transport failure, which is. An APIError is when the status is transient:

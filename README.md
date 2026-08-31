@@ -363,6 +363,14 @@ on `GET` only. Backoff doubles from 300ms, capped at 5s, and the server's
 `Retry-After` wins when one is sent. A cancelled context interrupts the wait,
 not just the request.
 
+`GetHealth` is held out of this, whatever `n` is. Its 503 is the answer rather
+than a blip — a readiness check failed and the body names which — so repeating
+it returns the same report a backoff later. Every other `GET` retries normally.
+`CreateInvestigation` is never retried either, for the idempotency reason above.
+
+This is the same list, precedence, ceiling and set of exclusions as
+[`@credda/js`](https://github.com/Credda-io/credda-js).
+
 ## Versioning
 
 **The module path does not change. It stays `github.com/Credda-io/credda-go`.**
