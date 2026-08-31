@@ -57,7 +57,7 @@ import credda "github.com/Credda-io/credda-go"
 That is the whole install. No vendoring, no `replace` directive, no transitive
 graph to audit.
 
-> **That command gets v0.3.0 today — checked 2026-08-28.** The highest tag this
+> **That command gets v0.3.0 today — checked 2026-08-30.** The highest tag this
 > module has is **v0.3.0**, which is the retired reliability-score client. The
 > engine client this README documents is **v0.4.0, and it is not tagged yet**;
 > `proxy.golang.org` lists only `v0.1.0`, `v0.1.1`, `v0.2.0`, `v0.3.0`. Until
@@ -244,11 +244,17 @@ will not pretend it did.
 Nothing in this package invents an endpoint, a field, a parameter or a
 behaviour. If the engine does not serve it, it is not here. In particular:
 
-- **No method starts or advances a run.** `CreateInvestigation` writes a row in
-  state `CREATED` and returns; execution is driven by the engine's worker, and
-  the API exposes no route for it. Stopping one is the exception, and only
-  because the engine grew a route for it on 2026-08-29 — and even that route
-  cannot stop a run the job queue does not own.
+- **No method advances a run**, and **no method asks the create route to start
+  one** — which are two different statements, and this README used to make only
+  the second-sounding version of the first. Advancing is the worker's and the
+  API mounts no route for it. Starting is different: the engine's create body
+  takes a `start` boolean (default `false`) that commits the investigation and
+  its job in one write, and an optional downward-only `budget` beside it.
+  `CreateInvestigationInput` carries **neither field**, so every create this
+  package sends records a row and enqueues nothing, and
+  `InvestigationDetail.Start` comes back `NOT_REQUESTED`. That is a gap in this
+  client, not a limit of the engine. Stopping a run is a real route, added
+  2026-08-29 — and even it cannot stop a run the job queue does not own.
 - **No method creates a validation, a patch, or a pull request.** Those are the
   worker's, and the API has no route for them.
 - **No method mints or revokes an API key.** The API has none. Nothing in the
@@ -551,18 +557,30 @@ the PR is what the product is for, and this client types the whole record that
 describes one: `Patch`, `Verification`, `VerificationSignals`,
 `Resolution.Fix`, `Resolution.RegressionProtection`.
 
-**Status, with a date on it:** as of the API this client was written against
-(August 2026), the engine's patch path is withheld from the default run pending
-the first model-backed run. On such a deployment `InvestigationDetail.Patches`
-and `.Verifications` come back empty, and `Resolution.Fix` and
-`.Verification` come back `nil`, with the reason named in
-`Confidence.NotEstablished` rather than papered over.
+**Status, with a date on it — and it has moved.** This section used to say the
+patch path was withheld from the default run pending the first model-backed run.
+That expired on **2026-08-27**, when ADR 0019 put the Fix and Verify stages back
+on the investigation path on the evidence that a model-backed provider exists
+and works. The engine's `INVESTIGATION_STATES` carries the seven patch-path
+states — `GENERATING_PATCH`, `TESTING_PATCH`, `VERIFYING`, `VERIFIED`,
+`READY_FOR_REVIEW`, `VERIFICATION_FAILED`, `PATCH_REJECTED` — and
+`credda.InvestigationStates` here withheld all seven until this commit, so
+filtering `?state=READY_FOR_REVIEW` was a valid query this package told you did
+not exist.
 
-That is a status and not a principle. It is gated on one API key, it moves when
-the number moves, and this client already types what it will carry when it does.
-The Credda engine's own [ADR 0018](https://github.com/Credda-io/core) is the
-authority on this and says it plainly: a sentence describing a missing capability
-must be falsifiable by a number, and must move when the number moves.
+What is still conditional is the **deployment**, not the product. The gate is
+not in the state graph: `provider.isGenerative` in the orchestrator decides
+whether a run enters the fix stage at all, because a rule-based provider cannot
+author a patch and a heuristic patch is worse than none. On a deployment that
+resolved no generative provider, `InvestigationDetail.Patches` and
+`.Verifications` come back empty and `Resolution.Fix` and `.Verification` come
+back `nil`, with the reason named in `Confidence.NotEstablished` rather than
+papered over. That is a fact about one deployment's configuration, and it must
+not be written down again as a fact about Credda.
+
+ADR 0018 is the authority and says it plainly: a sentence describing a missing
+capability must be falsifiable by a number, and must move when the number moves.
+This section is what happens when nobody moves it.
 
 ## The no-dependencies rule
 

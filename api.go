@@ -44,12 +44,18 @@ type InvestigationQuery struct {
 	Page
 }
 
+// Two filters the engine's listQuery declares and this struct does not carry:
+// `hasSignal`, which asks WHETHER a run was raised by a reported failure rather
+// than which one raised it, and `issueRef`, the provenance filter that answers
+// "did I already file this?" — and which is the one filter on that route that
+// does not 404 on a value nothing matches. Neither is reachable from here.
+
 // ListInvestigations returns a page of investigations, newest first.
 //
 // GET /api/investigations
 //
-// Total is the count of everything matching State in this organisation, so it
-// does not shrink as you page.
+// Total is counted under the same filters the page was cut with — every one of
+// them, not State alone — so it does not shrink as you page.
 func (c *Client) ListInvestigations(ctx context.Context, q *InvestigationQuery) (*InvestigationList, error) {
 	qs := url.Values{}
 	if q != nil {
@@ -67,6 +73,12 @@ func (c *Client) ListInvestigations(ctx context.Context, q *InvestigationQuery) 
 }
 
 // CreateInvestigationInput is the body of CreateInvestigation.
+//
+// It is a strict subset of the engine's createBody: `start` and `budget` are
+// declared there and are not here, so no request this client builds can queue a
+// run or lower its ceiling. The schema is .strict(), so nothing may be added to
+// this struct that the engine does not declare — but the reverse gap, a field
+// the engine declares and this struct omits, fails nothing and is what happened.
 type CreateInvestigationInput struct {
 	// RepositoryID must name a repository in this organisation. One that does
 	// not, or that belongs to another organisation, is a 404.
@@ -80,15 +92,23 @@ type CreateInvestigationInput struct {
 	IssueRef *string `json:"issueRef,omitempty"`
 }
 
-// CreateInvestigation enqueues an investigation and returns it in state
+// CreateInvestigation records an investigation and returns it in state
 // CREATED.
 //
 // POST /api/investigations
 //
-// It does NOT run anything. Execution is driven by the engine's worker, and
-// this route only writes the row it will pick up. The returned detail therefore
-// has no events, no evidence and no outcome; watch Stream or poll
-// InvestigationEvents for what happens next.
+// AS THIS CLIENT SENDS IT, IT RUNS NOTHING. The engine's create route takes a
+// `start` boolean that commits the row and its job in one write, and an
+// optional downward-only `budget` beside it; CreateInvestigationInput carries
+// neither, so the body always omits them, `start` defaults to false at the
+// engine, and this route writes a row nothing will claim until a webhook or a
+// `credda run` picks the work up. The returned detail therefore has no events,
+// no evidence and no outcome, and Start reads "NOT_REQUESTED".
+//
+// Read InvestigationDetail.Start rather than assuming that. It is the route's
+// own statement about what it did, and it is the field to check if this package
+// later learns to ask for a run. Watch Stream or poll InvestigationEvents for
+// what happens next.
 //
 // This call sends no Idempotency-Key and is never retried, even with
 // WithRetries. Without that header the route behaves exactly as it did before
@@ -322,6 +342,11 @@ func (c *Client) ListRepositories(ctx context.Context, p *Page) (*RepositoryList
 // Every investigation and validation carries a RepositoryID; this is what
 // resolves one without paging ListRepositories until the id turns up. An
 // unknown id, or one in another organisation, is a 404.
+//
+// The response also carries `investigations` and `validations`, the two counts
+// over this repository under the caller's scope, and this method discards them:
+// it returns the record alone. They are counted apart at the engine because
+// they are different runs and a sum of them cannot be taken apart again.
 func (c *Client) GetRepository(ctx context.Context, id string) (*Repository, error) {
 	var out struct {
 		Repository Repository `json:"repository"`
@@ -381,6 +406,9 @@ type ResolutionQuery struct {
 	Confidence string
 	Page
 }
+
+// The engine's listQuery also declares `hasSignal` here, and this struct does
+// not carry it.
 
 // ListResolutions returns a page of resolution records.
 //
@@ -449,6 +477,9 @@ type ValidationQuery struct {
 	Page
 }
 
+// The engine's listQuery also declares `sourceRef`, and this struct does not
+// carry it.
+
 // ListValidations returns a page of validation runs — the review queue.
 //
 // GET /api/validations
@@ -486,6 +517,10 @@ func (c *Client) GetValidation(ctx context.Context, id string) (*ValidationDetai
 // Total is the size of the whole plan. Read BaseStatus on every failing check:
 // it is what separates a failure this change caused from one that was already
 // there.
+//
+// The engine's checksQuery declares a `status` filter over CHECK_STATUSES and
+// counts Total under it; this method takes only a page, so "which of them
+// failed" still means pulling the plan and tallying it here.
 func (c *Client) ValidationChecks(ctx context.Context, id string, p *Page) (*CheckPage, error) {
 	qs := url.Values{}
 	p.apply(qs)

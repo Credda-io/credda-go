@@ -399,3 +399,264 @@ func isNilPtr(v any) bool {
 		return v == nil
 	}
 }
+
+// ── 4. fields the engine sends that this client used to drop ────────────────
+//
+// The other direction of the same defect. A field the API sends and no struct
+// names is discarded by encoding/json without a word, so the failure is not a
+// wrong value on screen but a value that never arrives — and every one of these
+// was on the wire while this package's own doc comments said it was not there.
+// They are pinned as decodes rather than described.
+
+// The queue row carries its repository and its signal. This type used to say
+// "it deliberately carries no RepositoryID: the engine's list serializer omits
+// it", which sent a queue screen down one detail request per row for a field
+// that was already in the page and was being thrown away here.
+func TestQueueRowCarriesItsRepositoryAndSignal(t *testing.T) {
+	c := serveJSON(t, `{
+		"investigations":[{"id":"inv_1","repositoryId":"repo_1",
+		                   "repositorySource":"local:web","issueRef":null,
+		                   "issueTitle":"Checkout 500s","signalId":"sig_9",
+		                   "state":"READY_FOR_REVIEW","outcome":"VERIFIED",
+		                   "providerId":"claude","startedAt":null,"completedAt":null,
+		                   "createdAt":"2026-08-30T00:00:00.000Z","durationMs":null,
+		                   "eventCount":3,"evidenceCount":2}],
+		"total":1
+	}`)
+
+	out, err := c.ListInvestigations(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("decoding the queue: %v", err)
+	}
+	row := out.Investigations[0]
+	if row.RepositoryID != "repo_1" {
+		t.Errorf("RepositoryID = %q, want repo_1", row.RepositoryID)
+	}
+	if row.RepositorySource == nil || *row.RepositorySource != "local:web" {
+		t.Errorf("RepositorySource = %v, want local:web", row.RepositorySource)
+	}
+	if row.SignalID == nil || *row.SignalID != "sig_9" {
+		t.Errorf("SignalID = %v, want sig_9", row.SignalID)
+	}
+	// The patch path is on the engine's investigation path since ADR 0019, and
+	// this vocabulary withheld both of these until it was corrected.
+	if row.State != "READY_FOR_REVIEW" || row.Outcome == nil || *row.Outcome != "VERIFIED" {
+		t.Errorf("a patch-path row did not survive: %+v", row)
+	}
+}
+
+// A signal set with no signal record and a run nothing raised are DIFFERENT
+// answers, and only both fields together separate them: the engine's signal
+// read is organisation-scoped, so a run pointed at another organisation's
+// signal arrives with SignalID set and Signal nil. Reading that as "nobody
+// reported this" is a claim about the record made from a fact about the caller.
+func TestSignalNotVisibleIsNotSignalAbsent(t *testing.T) {
+	c := serveJSON(t, `{
+		"investigation":{"id":"inv_1","orgId":"o1","repositoryId":"r1","issueRef":null,
+		                 "issueTitle":"t","issueBody":"b","signalId":"sig_other",
+		                 "state":"INVESTIGATING","outcome":null,"providerId":null,
+		                 "startedAt":null,"completedAt":null,"error":null,
+		                 "createdAt":"2026-08-30T00:00:00.000Z",
+		                 "updatedAt":"2026-08-30T00:00:00.000Z","durationMs":null},
+		"signal":null,
+		"hypotheses":[],"patches":[],"verifications":[],
+		"cost":null,"effectiveBudget":null,
+		"evidenceCount":0,"latestSequence":0
+	}`)
+
+	out, err := c.GetInvestigation(context.Background(), "inv_1")
+	if err != nil {
+		t.Fatalf("decoding the detail: %v", err)
+	}
+	if out.Investigation.SignalID == nil {
+		t.Fatal("SignalID was dropped; the two nil readings are now indistinguishable")
+	}
+	if out.Signal != nil {
+		t.Errorf("Signal = %+v, want nil", out.Signal)
+	}
+	// Null is not zero, one field over: a run still executing recorded no cost
+	// and was given no recorded ceiling.
+	if out.Cost != nil || out.EffectiveBudget != nil {
+		t.Errorf("an unrecorded spend decoded to a value: %+v %+v", out.Cost, out.EffectiveBudget)
+	}
+}
+
+// What a finished run spent, and under what ceiling. modelCostBasis is not
+// decoration: UNPRICED makes ModelCostUsd a floor, so both have to arrive.
+func TestRunCostAndEffectiveBudgetDecode(t *testing.T) {
+	c := serveJSON(t, `{
+		"investigation":{"id":"inv_1","orgId":"o1","repositoryId":"r1","issueRef":null,
+		                 "issueTitle":"t","issueBody":"b","signalId":null,
+		                 "state":"READY_FOR_REVIEW","outcome":"VERIFIED","providerId":"claude",
+		                 "startedAt":null,"completedAt":null,"error":null,
+		                 "createdAt":"2026-08-30T00:00:00.000Z",
+		                 "updatedAt":"2026-08-30T00:00:00.000Z","durationMs":null},
+		"signal":null,"hypotheses":[],"patches":[],"verifications":[],
+		"cost":{"investigationId":"inv_1","providerId":"claude","wallClockMs":65000,
+		        "commandMs":1200,"commandCount":9,"sandbox":null,"modelCallCount":11,
+		        "inputTokens":40000,"outputTokens":3000,"cachedInputTokens":0,
+		        "modelCostUsd":0.1255,"modelCostBasis":"UNPRICED",
+		        "recordedAt":"2026-08-30T00:01:05.000Z"},
+		"effectiveBudget":{"investigationId":"inv_1",
+		        "limits":{"maxWallClockMs":900000,"maxModelCalls":40,"maxTokens":400000,
+		                  "maxToolCalls":120,"maxCommandMs":120000,"maxSandboxMs":900000,
+		                  "maxPatchAttempts":3,"maxCostUsd":5},
+		        "requestedFields":["maxCostUsd"],"clampedFields":[],"attemptsStarted":1,
+		        "recordedAt":"2026-08-30T00:00:01.000Z",
+		        "lastAttemptAt":"2026-08-30T00:00:01.000Z"},
+		"evidenceCount":4,"latestSequence":22
+	}`)
+
+	out, err := c.GetInvestigation(context.Background(), "inv_1")
+	if err != nil {
+		t.Fatalf("decoding the detail: %v", err)
+	}
+	if out.Cost == nil || out.Cost.ModelCostBasis != "UNPRICED" {
+		t.Fatalf("Cost = %+v; the basis that makes the figure a floor was dropped", out.Cost)
+	}
+	// The sandbox was never provisioned. Nil, not four zeroes claiming it was.
+	if out.Cost.Sandbox != nil {
+		t.Errorf("Sandbox = %+v, want nil", out.Cost.Sandbox)
+	}
+	if out.EffectiveBudget == nil || out.EffectiveBudget.Limits.MaxCostUsd != 5 {
+		t.Fatalf("EffectiveBudget = %+v", out.EffectiveBudget)
+	}
+	if len(out.EffectiveBudget.RequestedFields) != 1 || out.EffectiveBudget.AttemptsStarted != 1 {
+		t.Errorf("EffectiveBudget = %+v", out.EffectiveBudget)
+	}
+}
+
+// The create route says what it did with the run, and this client always gets
+// NOT_REQUESTED because CreateInvestigationInput sends no `start`. The field is
+// read off the response rather than assumed, so the day this client learns to
+// ask, nothing here has to change to notice.
+func TestCreateResponseSaysWhetherARunWasQueued(t *testing.T) {
+	c := serveJSON(t, `{
+		"investigation":{"id":"inv_new","orgId":"o1","repositoryId":"r1","issueRef":null,
+		                 "issueTitle":"t","issueBody":"b","signalId":null,"state":"CREATED",
+		                 "outcome":null,"providerId":null,"startedAt":null,"completedAt":null,
+		                 "error":null,"createdAt":"2026-08-30T00:00:00.000Z",
+		                 "updatedAt":"2026-08-30T00:00:00.000Z","durationMs":null},
+		"signal":null,"hypotheses":[],"patches":[],"verifications":[],
+		"cost":null,"effectiveBudget":null,"evidenceCount":0,"latestSequence":0,
+		"start":"NOT_REQUESTED","budget":null
+	}`)
+
+	out, err := c.CreateInvestigation(context.Background(), CreateInvestigationInput{
+		RepositoryID: "r1", IssueTitle: "t", IssueBody: "b",
+	})
+	if err != nil {
+		t.Fatalf("creating: %v", err)
+	}
+	if out.Start == nil || *out.Start != "NOT_REQUESTED" {
+		t.Errorf("Start = %v, want NOT_REQUESTED — this client queues nothing", out.Start)
+	}
+	if out.RequestedBudget != nil {
+		t.Errorf("RequestedBudget = %+v; a request that queued no job has no ceiling", out.RequestedBudget)
+	}
+}
+
+// Null and empty are different answers: null is a record written before the
+// engine kept refusals and says nothing, empty is a run that declined nothing.
+// Collapsing them reports "Credda declined no part of this report" about a
+// record that was never asked.
+func TestDeclinedReproductionsNullIsNotEmpty(t *testing.T) {
+	const body = `{"resolution":{"id":"res_1","investigationId":"inv_1",
+		"bug":{"reported":"x","reference":null,"signalId":null,"affectedFiles":[]},
+		"evidence":[],
+		"reproduction":{"status":"REPRODUCED","command":null,"signature":null,
+		                "evidenceId":null,"timedOutAttempts":null},
+		"rootCause":null,"fix":null,"verification":null,
+		"regressionProtection":{"status":"NONE","before":"NOT_RUN","after":"NOT_RUN"},
+		%s
+		"confidence":{"class":"NOT_ESTABLISHED","notEstablished":["nothing"]},
+		"createdAt":"2026-08-30T00:00:00.000Z"}}`
+
+	silent := serveJSON(t, strings.Replace(body, "%s", `"declinedReproductions":null,`, 1))
+	r, err := silent.GetResolution(context.Background(), "res_1")
+	if err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	if r.DeclinedReproductions != nil {
+		t.Errorf("a record that says nothing decoded to %v", *r.DeclinedReproductions)
+	}
+
+	declined := serveJSON(t, strings.Replace(body, "%s",
+		`"declinedReproductions":[{"source":"issue","reason":"asks for a credential","excerpt":"log in as admin"}],`, 1))
+	r2, err := declined.GetResolution(context.Background(), "res_1")
+	if err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	if r2.DeclinedReproductions == nil || len(*r2.DeclinedReproductions) != 1 {
+		t.Fatalf("DeclinedReproductions = %v", r2.DeclinedReproductions)
+	}
+	if (*r2.DeclinedReproductions)[0].Reason != "asks for a credential" {
+		t.Errorf("got %+v", (*r2.DeclinedReproductions)[0])
+	}
+}
+
+// The workspace carries the ceiling a run started now would get, and the count
+// of distinct reported failures work was opened from. Both were being dropped.
+func TestOrganizationCarriesItsSignalCountAndDefaultBudget(t *testing.T) {
+	c := serveJSON(t, `{
+		"organization":{"id":"o1","name":"Acme","slug":"acme",
+		                "createdAt":"2026-01-01T00:00:00.000Z"},
+		"memberCount":0,"apiKeyCount":1,"revokedApiKeyCount":0,
+		"repositoryCount":2,"investigationCount":9,"validationCount":3,
+		"signalCount":4,
+		"defaultRunBudget":{"maxWallClockMs":900000,"maxModelCalls":40,"maxTokens":400000,
+		                    "maxToolCalls":120,"maxCommandMs":120000,"maxSandboxMs":900000,
+		                    "maxPatchAttempts":3,"maxCostUsd":5}
+	}`)
+
+	out, err := c.GetOrganization(context.Background())
+	if err != nil {
+		t.Fatalf("decoding the workspace: %v", err)
+	}
+	if out.SignalCount != 4 {
+		t.Errorf("SignalCount = %d, want 4", out.SignalCount)
+	}
+	if out.DefaultRunBudget == nil || out.DefaultRunBudget.MaxCostUsd != 5 {
+		t.Fatalf("DefaultRunBudget = %+v", out.DefaultRunBudget)
+	}
+	// An engine that predates the field leaves nil rather than a budget of
+	// zeroes, which would read as a run that may spend nothing.
+	older := serveJSON(t, `{"organization":{"id":"o1","name":"Acme","slug":"acme",
+		"createdAt":"2026-01-01T00:00:00.000Z"},"memberCount":0,"apiKeyCount":1,
+		"revokedApiKeyCount":0,"repositoryCount":0,"investigationCount":0,
+		"validationCount":0}`)
+	out2, err := older.GetOrganization(context.Background())
+	if err != nil {
+		t.Fatalf("decoding an older workspace: %v", err)
+	}
+	if out2.DefaultRunBudget != nil {
+		t.Errorf("DefaultRunBudget = %+v, want nil", out2.DefaultRunBudget)
+	}
+}
+
+// A check runs inside an investigation, so an investigation's evidence page
+// mixes rows the investigation produced with rows one of its checks did. The
+// engine sends validationId and checkId together precisely so a client can tell
+// them apart; this client named only one of the pair.
+func TestInvestigationEvidenceSaysWhichCheckProducedIt(t *testing.T) {
+	c := serveJSON(t, `{"evidence":[
+		{"id":"ev_1","investigationId":"inv_1","validationId":null,"checkId":null,
+		 "type":"REPRODUCTION","phase":"BEFORE_PATCH","strength":"STRONG","summary":"a",
+		 "contentRef":null,"metadata":{},"signature":null,
+		 "createdAt":"2026-08-30T00:00:00.000Z"},
+		{"id":"ev_2","investigationId":"inv_1","validationId":"val_7","checkId":"chk_3",
+		 "type":"TEST_RESULT","phase":"INDEPENDENT","strength":"MODERATE","summary":"b",
+		 "contentRef":null,"metadata":{},"signature":null,
+		 "createdAt":"2026-08-30T00:00:01.000Z"}],"total":2}`)
+
+	out, err := c.InvestigationEvidence(context.Background(), "inv_1", nil)
+	if err != nil {
+		t.Fatalf("decoding evidence: %v", err)
+	}
+	if out.Evidence[0].ValidationID != nil {
+		t.Errorf("the investigation's own row claimed a validation: %v", out.Evidence[0].ValidationID)
+	}
+	if out.Evidence[1].ValidationID == nil || *out.Evidence[1].ValidationID != "val_7" {
+		t.Errorf("ValidationID = %v, want val_7", out.Evidence[1].ValidationID)
+	}
+}

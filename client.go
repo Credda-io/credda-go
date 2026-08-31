@@ -2,8 +2,13 @@
 //
 // A customer labels a bug report or a security vulnerability; Credda reproduces
 // the failure, diagnoses the cause, writes the patch, proves it with a test
-// that fails before and passes after, and hands back a diff. Opening a pull
-// request is opt-in and off by default. It proposes; it never merges.
+// that fails before and passes after, and hands back a diff. Whether that diff
+// becomes a pull request depends on which mechanism delivered it: the GitHub
+// App path opens one with no flag and no opt-in switch, for a run that reaches
+// READY_FOR_REVIEW with a proven verdict; the GitHub Action, running on the
+// caller's own runner, opens none unless an input that is declared on no
+// reachable version is set. It proposes; it never merges. Neither path is on
+// this API — there is no pull-request route to wrap.
 //
 // This package is a typed reader over that engine's HTTP API. Every method here
 // corresponds to a route mounted in the engine (apps/api/src/app.ts) and every
@@ -14,15 +19,24 @@
 // # What this client can do
 //
 // The surface is read-mostly, because the API is. There are two writes.
-// CreateInvestigation enqueues an investigation in state CREATED —
+// CreateInvestigation records an investigation in state CREATED —
 // CreateInvestigationOnce is the same route under an Idempotency-Key, which is
 // what makes a retried create safe to bill for. CancelInvestigation stops a run,
 // and says whether it actually stopped it or only asked.
 //
-// Execution itself is driven by the engine's worker, not by the API, so there is
-// no method here that starts or advances a run, and none that creates a
-// validation, a patch, or a pull request. Those are the worker's, and the API
-// exposes no route for them.
+// THE CREATE ROUTE CAN ALSO QUEUE THE RUN, AND THIS CLIENT DOES NOT ASK IT TO.
+// The engine's createBody grew a `start` boolean, defaulting to false, and an
+// optional downward-only `budget` beside it; with start true the row and its
+// job commit together and the response says QUEUED. CreateInvestigationInput
+// carries neither field, so every create this package sends records a row and
+// enqueues nothing, and InvestigationDetail.Start comes back NOT_REQUESTED.
+// That is a gap in this client and not a limit of the engine: read
+// InvestigationDetail.Start rather than assuming, and do not repeat the older
+// sentence here, which said the API exposes no way to start a run at all.
+//
+// Advancing a run IS the worker's, and so are creating a validation, a patch
+// and a pull request. The API mounts no route for any of them, which is why
+// there is no method here for them either.
 //
 // # Authentication
 //
