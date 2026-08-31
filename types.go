@@ -155,6 +155,24 @@ var EvidenceTypes = []string{
 	"VULNERABILITY",
 }
 
+// CheckStatuses is the status filter vocabulary for ValidationChecks, from
+// CHECK_STATUSES in packages/shared/src/validation.ts.
+//
+// PRE_EXISTING_FAILURE is the one that carries the product: a check that failed
+// and failed the same way against the base commit did not fail because of this
+// change. It is a separate status rather than a FAILED with a footnote, for the
+// same reason ValidationCheck.BaseStatus is never omitted. BLOCKED means the
+// check never ran, so it is not a verdict on the software at all.
+var CheckStatuses = []string{
+	"PENDING",
+	"RUNNING",
+	"PASSED",
+	"FAILED",
+	"PRE_EXISTING_FAILURE",
+	"BLOCKED",
+	"SKIPPED",
+}
+
 // FindingSeverities is the severity filter vocabulary for ValidationFindings,
 // from FINDING_SEVERITIES in packages/shared/src/validation.ts.
 var FindingSeverities = []string{

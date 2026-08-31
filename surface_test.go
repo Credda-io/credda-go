@@ -1,6 +1,7 @@
 package credda
 
 import (
+	"bytes"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
@@ -41,9 +42,10 @@ import (
 //     own routes below, so a copy hand-edited to make this suite pass fails
 //     instead.
 //   - Propagation, in core: route-surface.consumers.json records the digest
-//     this repository was last given, and core's own suite fails -- in CI,
-//     naming credda-go -- when the engine's surface moves past it. Refreshing
-//     is: copy the file in, update the ledger there.
+//     this repository was last given -- both of them, since 2026-08-30, the
+//     route digest and the vocabularyDigest -- and core's own suite fails --
+//     in CI, naming credda-go -- when the engine's surface moves past either.
+//     Refreshing is: copy the file in, update the ledger there.
 //
 //go:embed route-surface.json
 var routeSurfaceJSON []byte
@@ -58,10 +60,16 @@ type surfaceRoute struct {
 }
 
 type routeSurface struct {
-	Generator  string         `json:"generator"`
-	Digest     string         `json:"digest"`
-	RouteCount int            `json:"routeCount"`
-	Routes     []surfaceRoute `json:"routes"`
+	Generator        string         `json:"generator"`
+	Digest           string         `json:"digest"`
+	VocabularyDigest string         `json:"vocabularyDigest"`
+	RouteCount       int            `json:"routeCount"`
+	Routes           []surfaceRoute `json:"routes"`
+	// Vocabularies is kept raw. The digest below is taken over the generator's
+	// own serialisation, and a Go map does not preserve the key order that
+	// serialisation has; decoding into one and re-encoding would compute a
+	// digest over a different document.
+	Vocabularies json.RawMessage `json:"vocabularies"`
 }
 
 func loadSurface(t *testing.T) routeSurface {
@@ -207,5 +215,152 @@ func TestEveryMappedMethodExists(t *testing.T) {
 			t.Errorf("(*Client).%s is mapped to both %s and %s; one method may not serve two routes", name, prev, key)
 		}
 		seen[name] = key
+	}
+}
+
+// ── the query vocabularies ──────────────────────────────────────────────────
+//
+// WHY THIS EXISTS. The route digest covers the routes and nothing else, so the
+// ten closed sets in types.go were held to the engine by nobody. That is how
+// eight members drifted with this suite green on 2026-08-30: InvestigationStates
+// withheld all seven patch-path states after ADR 0019 put them back on the
+// investigation path, so ?state=READY_FOR_REVIEW -- a 200 on the engine -- was
+// a value this package told its reader did not exist, and InvestigationOutcomes
+// was missing three more. The copy of route-surface.json this repository held
+// carried no `vocabularies` block at all until the same day, so there was
+// nothing to check against either.
+//
+// The check below is a COMPARISON against the artifact, not a second list. A
+// test that restated the members in Go source would drift in exactly the way
+// types.go did, one level down.
+
+// filterVocabularies maps a declared query filter to the exported slice that
+// publishes its closed set. This is the hand-written half and the only half
+// that can be: which Go identifier answers which filter. The MEMBERS are never
+// written here.
+var filterVocabularies = map[string]map[string]*[]string{
+	"GET /api/investigations": {
+		"state":   &InvestigationStates,
+		"outcome": &InvestigationOutcomes,
+	},
+	"GET /api/investigations/{id}/evidence": {"type": &EvidenceTypes},
+	"GET /api/repositories/{id}/learnings":  {"kind": &LearningKinds},
+	"GET /api/resolutions":                  {"confidence": &ResolutionConfidenceClasses},
+	"GET /api/validations": {
+		"state":   &ValidationStates,
+		"outcome": &ValidationOutcomes,
+	},
+	"GET /api/validations/{id}/checks":   {"status": &CheckStatuses},
+	"GET /api/validations/{id}/evidence": {"type": &EvidenceTypes},
+	"GET /api/validations/{id}/findings": {
+		"severity": &FindingSeverities,
+		"status":   &FindingStatuses,
+	},
+}
+
+// untypedFilters are the declared filters this package deliberately publishes
+// no slice for, with the reason. A filter that is neither mapped above nor
+// named here fails, so the engine gaining one is noticed rather than absorbed.
+var untypedFilters = map[string]string{
+	"hasSignal":    "a boolean, sent as a bool field on the options struct; the artifact spells its four accepted encodings and Go has one",
+	"includeDebug": "the same, on the events options",
+}
+
+func surfaceVocabularies(t *testing.T, s routeSurface) map[string]map[string][]string {
+	t.Helper()
+	if len(s.Vocabularies) == 0 {
+		t.Fatal("route-surface.json carries no vocabularies block; re-copy it from core")
+	}
+	var v map[string]map[string][]string
+	if err := json.Unmarshal(s.Vocabularies, &v); err != nil {
+		t.Fatalf("the vocabularies block does not parse: %v", err)
+	}
+	return v
+}
+
+// TestVocabularyBlockWasNotEditedByHand is the integrity guard for the second
+// half of the artifact, mirroring TestRouteSurfaceWasNotEditedByHand. The
+// generator digests JSON.stringify of the block, which is the compaction of the
+// bytes on disk, so the raw bytes are compacted rather than round-tripped.
+func TestVocabularyBlockWasNotEditedByHand(t *testing.T) {
+	s := loadSurface(t)
+	if len(s.Vocabularies) == 0 {
+		t.Fatal("route-surface.json carries no vocabularies block; re-copy it from core")
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, s.Vocabularies); err != nil {
+		t.Fatalf("compacting the vocabularies block: %v", err)
+	}
+	sum := sha256.Sum256(compact.Bytes())
+	got := "sha256-" + hex.EncodeToString(sum[:])
+	if got != s.VocabularyDigest {
+		t.Errorf("vocabularyDigest = %s, want %s\nroute-surface.json was modified after generation; re-copy it from core", got, s.VocabularyDigest)
+	}
+}
+
+// TestEveryDeclaredFilterIsAccountedFor closes both directions: a filter the
+// engine gains with no slice fails by name, and a mapping kept for a filter the
+// engine dropped fails too.
+func TestEveryDeclaredFilterIsAccountedFor(t *testing.T) {
+	s := loadSurface(t)
+	vocabularies := surfaceVocabularies(t, s)
+
+	known := map[string]bool{}
+	for _, key := range surfaceKeys(s) {
+		known[key] = true
+	}
+
+	declared := 0
+	for key, params := range vocabularies {
+		if !known[key] {
+			t.Errorf("%s carries a vocabulary and is not a route the engine serves", key)
+		}
+		for param := range params {
+			declared++
+			if _, ok := filterVocabularies[key][param]; ok {
+				continue
+			}
+			if _, ok := untypedFilters[param]; ok {
+				continue
+			}
+			t.Errorf("the engine declares a vocabulary for %s ?%s and this package neither publishes it nor says why not; add the slice to types.go and map it, or add untypedFilters entry with a reason", key, param)
+		}
+	}
+	if declared <= 10 {
+		t.Errorf("read %d filters out of the artifact; too few to have checked anything", declared)
+	}
+
+	for key, params := range filterVocabularies {
+		for param := range params {
+			if _, ok := vocabularies[key][param]; !ok {
+				t.Errorf("this package publishes a vocabulary for %s ?%s and the engine no longer declares it", key, param)
+			}
+		}
+	}
+}
+
+// TestPublishedVocabulariesAreTheEngines is the assertion the ten slices were
+// missing. DeepEqual on the whole slice, not membership: a set that has LOST a
+// value the engine can return fails exactly as loudly as one that has gained a
+// value the engine cannot, and the order is the engine's own.
+func TestPublishedVocabulariesAreTheEngines(t *testing.T) {
+	s := loadSurface(t)
+	vocabularies := surfaceVocabularies(t, s)
+
+	checked := 0
+	for key, params := range filterVocabularies {
+		for param, published := range params {
+			want, ok := vocabularies[key][param]
+			if !ok {
+				continue // reported by TestEveryDeclaredFilterIsAccountedFor
+			}
+			if !reflect.DeepEqual(*published, want) {
+				t.Errorf("%s ?%s: this package publishes\n  %v\nand the engine declares\n  %v", key, param, *published, want)
+			}
+			checked++
+		}
+	}
+	if checked != 11 {
+		t.Errorf("compared %d vocabularies, want 11; a mapping was dropped and this test went quiet", checked)
 	}
 }
