@@ -3,6 +3,7 @@ package credda
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 )
@@ -10,12 +11,19 @@ import (
 // Every method in this file is one route mounted in apps/api/src/app.ts. The
 // path in each doc comment is the literal path the engine serves.
 //
-// All of them are GET except CreateInvestigation. That is not an omission: the
-// API mounts exactly one POST route and no PATCH or DELETE at all. Resolution
-// records are never revised, so the repository has no update method and the
-// route module has no writing route to add one; keys are minted out of band by
-// the operator, because nothing in the engine separates an OWNER from a VIEWER
-// and a key that could mint keys would make every key a key factory.
+// All of them are GET except CreateInvestigation, CreateInvestigationOnce (the
+// same route, under an idempotency key) and CancelInvestigation. That is not an
+// omission: the API mounts exactly two POST routes and no PATCH or DELETE at
+// all. Resolution records are never revised, so the repository has no
+// update method and the route module has no writing route to add one; keys are
+// minted out of band by the operator, because nothing in the engine separates
+// an OWNER from a VIEWER and a key that could mint keys would make every key a
+// key factory.
+//
+// Every query parameter and body field these methods send is one the engine's
+// zod schemas declare. That is load-bearing rather than tidy: those schemas are
+// .strict(), so a key they do not define is a 400 CodeValidationFailed naming
+// it, where an unknown one was once accepted and ignored.
 
 // ── investigations ──────────────────────────────────────────────────────────
 
@@ -24,19 +32,37 @@ type InvestigationQuery struct {
 	// State filters to one investigation state. Must be a member of
 	// InvestigationStates; anything else is a 400 VALIDATION_FAILED.
 	State string
+	// Repository filters to one repository. An unknown one is a 404 rather
+	// than an empty page, for the reason on ResolutionQuery.
+	Repository string
+	// Signal filters to the investigations one signal caused. An unknown one
+	// is a 404, for the same reason.
+	Signal string
+	// Outcome filters to one outcome. Must be a member of
+	// InvestigationOutcomes.
+	Outcome string
 	Page
 }
+
+// Two filters the engine's listQuery declares and this struct does not carry:
+// `hasSignal`, which asks WHETHER a run was raised by a reported failure rather
+// than which one raised it, and `issueRef`, the provenance filter that answers
+// "did I already file this?" — and which is the one filter on that route that
+// does not 404 on a value nothing matches. Neither is reachable from here.
 
 // ListInvestigations returns a page of investigations, newest first.
 //
 // GET /api/investigations
 //
-// Total is the count of everything matching State in this organisation, so it
-// does not shrink as you page.
+// Total is counted under the same filters the page was cut with — every one of
+// them, not State alone — so it does not shrink as you page.
 func (c *Client) ListInvestigations(ctx context.Context, q *InvestigationQuery) (*InvestigationList, error) {
 	qs := url.Values{}
 	if q != nil {
 		setStr(qs, "state", q.State)
+		setStr(qs, "repository", q.Repository)
+		setStr(qs, "signal", q.Signal)
+		setStr(qs, "outcome", q.Outcome)
 		q.Page.apply(qs)
 	}
 	var out InvestigationList
@@ -47,6 +73,12 @@ func (c *Client) ListInvestigations(ctx context.Context, q *InvestigationQuery) 
 }
 
 // CreateInvestigationInput is the body of CreateInvestigation.
+//
+// It is a strict subset of the engine's createBody: `start` and `budget` are
+// declared there and are not here, so no request this client builds can queue a
+// run or lower its ceiling. The schema is .strict(), so nothing may be added to
+// this struct that the engine does not declare — but the reverse gap, a field
+// the engine declares and this struct omits, fails nothing and is what happened.
 type CreateInvestigationInput struct {
 	// RepositoryID must name a repository in this organisation. One that does
 	// not, or that belongs to another organisation, is a 404.
@@ -60,23 +92,151 @@ type CreateInvestigationInput struct {
 	IssueRef *string `json:"issueRef,omitempty"`
 }
 
-// CreateInvestigation enqueues an investigation and returns it in state
+// CreateInvestigation records an investigation and returns it in state
 // CREATED.
 //
 // POST /api/investigations
 //
-// It does NOT run anything. Execution is driven by the engine's worker, and
-// this route only writes the row it will pick up. The returned detail therefore
-// has no events, no evidence and no outcome; watch Stream or poll
-// InvestigationEvents for what happens next.
+// AS THIS CLIENT SENDS IT, IT RUNS NOTHING. The engine's create route takes a
+// `start` boolean that commits the row and its job in one write, and an
+// optional downward-only `budget` beside it; CreateInvestigationInput carries
+// neither, so the body always omits them, `start` defaults to false at the
+// engine, and this route writes a row nothing will claim until a webhook or a
+// `credda run` picks the work up. The returned detail therefore has no events,
+// no evidence and no outcome, and Start reads "NOT_REQUESTED".
 //
-// This call is never retried, even with WithRetries: the API accepts no
-// idempotency key, so a repeat would enqueue a second run against the same
-// report. The whole request body must be under 256KB or the engine refuses it
-// unread with a 413.
+// Read InvestigationDetail.Start rather than assuming that. It is the route's
+// own statement about what it did, and it is the field to check if this package
+// later learns to ask for a run. Watch Stream or poll InvestigationEvents for
+// what happens next.
+//
+// This call sends no Idempotency-Key and is never retried, even with
+// WithRetries. Without that header the route behaves exactly as it did before
+// the header existed — one run per request — so a repeat opens, and bills for, a
+// second investigation into the same report. That is the right default for a
+// caller who has not said two requests are one intent, and it is not the call to
+// make from a job queue that will retry you: use CreateInvestigationOnce.
+//
+// The whole request body must be under 256KB or the engine refuses it unread
+// with a 413.
 func (c *Client) CreateInvestigation(ctx context.Context, in CreateInvestigationInput) (*InvestigationDetail, error) {
 	var out InvestigationDetail
 	if err := c.post(ctx, "/investigations", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// CreateInvestigationOnce enqueues an investigation under an idempotency key —
+// the one write on this client that WithRetries will repeat.
+//
+// POST /api/investigations, with an Idempotency-Key header.
+//
+// Running an investigation spends a model budget, so a create sent twice because
+// a socket died is a second bill. Under a key the engine returns the run the
+// first request created, with 200 instead of 201, so repeating this call is
+// exactly-once at the server and retrying it is safe.
+//
+//	req, err := credda.NewIdempotentCreate(credda.CreateInvestigationInput{
+//		RepositoryID: repoID, IssueTitle: title, IssueBody: report,
+//	})
+//	if err != nil {
+//		return err
+//	}
+//	if err := jobs.Record(ticketID, req.Key()); err != nil {
+//		return err
+//	}
+//	created, err := client.CreateInvestigationOnce(ctx, req)
+//	if err != nil {
+//		return err
+//	}
+//	if created.Opened() {
+//		// A run just opened, and a budget with it.
+//	}
+//	// Otherwise StatusReplayed: an earlier attempt of ours got through. Nothing
+//	// was created here and nothing was billed.
+//
+// A NIL ERROR DOES NOT MEAN A RUN WAS OPENED. Both 201 and 200 are successes,
+// and only Status separates them.
+//
+// The key and the body arrive together, in one IdempotentCreate, because the
+// engine's other answer is a refusal: the same key over a DIFFERENT body is a
+// 409 *APIError with CodeIdempotencyKeyReused, disclosing neither run. Making
+// the pair as a unit is what keeps a key from drifting onto a report it was not
+// minted for; there is no overload here taking the two separately, and the zero
+// IdempotentCreate is refused rather than sent without a header.
+//
+// The claim is scoped to the organisation the API key names and never expires.
+// It is deleted when the investigation is.
+func (c *Client) CreateInvestigationOnce(ctx context.Context, req IdempotentCreate) (*InvestigationCreation, error) {
+	if req.key == "" {
+		return nil, fmt.Errorf("%w: build the request with NewIdempotentCreate", ErrInvalidIdempotencyKey)
+	}
+	var out InvestigationDetail
+	status, err := c.postOnce(ctx, "/investigations", req.key, req.input, &out)
+	if err != nil {
+		return nil, err
+	}
+	// 201 is the run this request opened; every other success on this route is
+	// the engine handing back one it already had. Read off the status line,
+	// because the two bodies are identical.
+	result := &InvestigationCreation{Detail: &out, Status: StatusReplayed, Key: req.key}
+	if status == http.StatusCreated {
+		result.Status = StatusCreated
+	}
+	return result, nil
+}
+
+// CancelInvestigationInput is the body of CancelInvestigation.
+type CancelInvestigationInput struct {
+	// Reason is recorded against the run. Optional, 1 to 500 characters: the
+	// engine's cancelBody makes it optional because a cancel with nothing said
+	// is still a cancel. An empty string is not sent.
+	Reason string `json:"reason,omitempty"`
+}
+
+// CancelInvestigation stops a run — or records that one has been ASKED to stop,
+// and tells you which of those happened.
+//
+// POST /api/investigations/{id}/cancel
+//
+// A cancel that reported success over a container still cloning a repository,
+// still running a test suite and still spending a model budget would have told
+// an operator something false about their own machine and their own bill. So
+// the route reports what it ACHIEVED, and this method hands that back whole
+// rather than reducing it to an error-or-nil:
+//
+//	c, err := client.CancelInvestigation(ctx, id, credda.CancelInvestigationInput{
+//		Reason: "wrong repository",
+//	})
+//	if err != nil {
+//		return err
+//	}
+//	switch c.Status {
+//	case credda.StatusCancellationRequested:
+//		// A worker is still inside the run. It stops on its next heartbeat and
+//		// writes its own terminal state; watch StreamInvestigation for it.
+//	default:
+//		// c.State is "CANCELLED". Nothing is running.
+//	}
+//
+// A NIL ERROR DOES NOT MEAN THE RUN STOPPED. Both 200 and 202 are successes at
+// the transport level, and only Status separates them. Cancellation.Stopped is
+// the short form of the switch above.
+//
+// Two refusals come back as a 409 *APIError, because neither stopped anything:
+// CodeAlreadyFinished when the run reached a terminal state, and
+// CodeNotCancellable when it is executing outside the job queue.
+//
+// Repeating the call is safe — an already-cancelled run answers
+// StatusAlreadyCancelled rather than an error. It is still never retried under
+// WithRetries, like every non-GET: a repeat that crosses a worker's heartbeat
+// answers a different status than the attempt it replaced, and a retry policy
+// that swallowed that would hand back "cancelled" for a call that was told
+// "requested".
+func (c *Client) CancelInvestigation(ctx context.Context, id string, in CancelInvestigationInput) (*Cancellation, error) {
+	var out Cancellation
+	if err := c.post(ctx, "/investigations/"+esc(id)+"/cancel", in, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -175,6 +335,28 @@ func (c *Client) ListRepositories(ctx context.Context, p *Page) (*RepositoryList
 	return &out, nil
 }
 
+// GetRepository returns one repository by id.
+//
+// GET /api/repositories/{id}
+//
+// Every investigation and validation carries a RepositoryID; this is what
+// resolves one without paging ListRepositories until the id turns up. An
+// unknown id, or one in another organisation, is a 404.
+//
+// The response also carries `investigations` and `validations`, the two counts
+// over this repository under the caller's scope, and this method discards them:
+// it returns the record alone. They are counted apart at the engine because
+// they are different runs and a sum of them cannot be taken apart again.
+func (c *Client) GetRepository(ctx context.Context, id string) (*Repository, error) {
+	var out struct {
+		Repository Repository `json:"repository"`
+	}
+	if err := c.get(ctx, "/repositories/"+esc(id), &out); err != nil {
+		return nil, err
+	}
+	return &out.Repository, nil
+}
+
 // LearningQuery filters RepositoryLearnings.
 type LearningQuery struct {
 	// Kind filters to one learning kind. Must be a member of LearningKinds.
@@ -224,6 +406,9 @@ type ResolutionQuery struct {
 	Confidence string
 	Page
 }
+
+// The engine's listQuery also declares `hasSignal` here, and this struct does
+// not carry it.
 
 // ListResolutions returns a page of resolution records.
 //
@@ -292,6 +477,9 @@ type ValidationQuery struct {
 	Page
 }
 
+// The engine's listQuery also declares `sourceRef`, and this struct does not
+// carry it.
+
 // ListValidations returns a page of validation runs — the review queue.
 //
 // GET /api/validations
@@ -329,6 +517,10 @@ func (c *Client) GetValidation(ctx context.Context, id string) (*ValidationDetai
 // Total is the size of the whole plan. Read BaseStatus on every failing check:
 // it is what separates a failure this change caused from one that was already
 // there.
+//
+// The engine's checksQuery declares a `status` filter over CHECK_STATUSES and
+// counts Total under it; this method takes only a page, so "which of them
+// failed" still means pulling the plan and tallying it here.
 func (c *Client) ValidationChecks(ctx context.Context, id string, p *Page) (*CheckPage, error) {
 	qs := url.Values{}
 	p.apply(qs)
@@ -339,12 +531,28 @@ func (c *Client) ValidationChecks(ctx context.Context, id string, p *Page) (*Che
 	return &out, nil
 }
 
+// FindingQuery filters ValidationFindings. Severity and Status narrow with AND;
+// each is one token, not a set.
+type FindingQuery struct {
+	// Severity must be a member of FindingSeverities.
+	Severity string
+	// Status must be a member of FindingStatuses.
+	Status string
+	Page
+}
+
 // ValidationFindings returns a page of what the run concluded was wrong.
 //
 // GET /api/validations/{id}/findings
-func (c *Client) ValidationFindings(ctx context.Context, id string, p *Page) (*FindingPage, error) {
+//
+// Total is the size of the filtered set, not of the page.
+func (c *Client) ValidationFindings(ctx context.Context, id string, q *FindingQuery) (*FindingPage, error) {
 	qs := url.Values{}
-	p.apply(qs)
+	if q != nil {
+		setStr(qs, "severity", q.Severity)
+		setStr(qs, "status", q.Status)
+		q.Page.apply(qs)
+	}
 	var out FindingPage
 	if err := c.get(ctx, withQuery("/validations/"+esc(id)+"/findings", qs), &out); err != nil {
 		return nil, err
@@ -357,10 +565,14 @@ func (c *Client) ValidationFindings(ctx context.Context, id string, p *Page) (*F
 // GET /api/validations/{id}/evidence
 //
 // Each record carries CheckID, which is what attaches an execution to the check
-// that cited it.
-func (c *Client) ValidationEvidence(ctx context.Context, id string, p *Page) (*EvidencePage, error) {
+// that cited it. The Type filter is the one InvestigationEvidence has, over the
+// same vocabulary.
+func (c *Client) ValidationEvidence(ctx context.Context, id string, q *EvidenceQuery) (*EvidencePage, error) {
 	qs := url.Values{}
-	p.apply(qs)
+	if q != nil {
+		setStr(qs, "type", q.Type)
+		q.Page.apply(qs)
+	}
 	var out EvidencePage
 	if err := c.get(ctx, withQuery("/validations/"+esc(id)+"/evidence", qs), &out); err != nil {
 		return nil, err

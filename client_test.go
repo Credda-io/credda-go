@@ -23,7 +23,10 @@ type capture struct {
 	RawURI string
 	Auth   string
 	Accept string
-	Calls  int
+	// Idempotency is the Idempotency-Key header, which only the create route
+	// sends and only under an IdempotentCreate.
+	Idempotency string
+	Calls       int
 }
 
 // newTestServer stands up a server that answers every request with status and
@@ -40,6 +43,7 @@ func newTestServer(t *testing.T, status int, body string) (*Client, *capture) {
 		got.Body = string(raw)
 		got.Auth = r.Header.Get("Authorization")
 		got.Accept = r.Header.Get("Accept")
+		got.Idempotency = r.Header.Get(IdempotencyHeader)
 		got.Calls++
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)

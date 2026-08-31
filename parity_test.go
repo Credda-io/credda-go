@@ -23,21 +23,23 @@ import (
 // or a mis-spelled query parameter fails here rather than at a customer's
 // deployment.
 //
-// REAL cross-SDK parity — this client and @credda/js agreeing — is still NOT
-// asserted here, and the reason has changed. It used to be that credda-js had
-// no client to compare against; it landed one on 2026-08-27, with its own
-// src/lib/surface.test.ts checking its method list against the same engine
-// routes this table reads. So both SDKs are now independently pinned to the
-// source of truth, which catches the failure that matters — a client drifting
-// from the API — in both languages.
+// WHAT IT DOES NOT COVER, AND WHAT NOW DOES.
 //
-// What that does NOT catch is the two of us reading the same route and
-// disagreeing about it. Nothing here can: the two suites hold two hand-written
-// tables, and a shared misreading agrees with itself. The honest form is one
-// fixture both suites load, generated from the engine's routes rather than
-// transcribed. That is the coordination item, and it is deliberately not faked
-// with an assertion nobody checked — which is the exact failure this file had
-// before it was rewritten.
+// This table lists what this client CALLS, so a route the ENGINE gains fails
+// nothing here. POST /api/investigations/{id}/cancel shipped in core on
+// 2026-08-29 and left credda-js green at 102 tests with no method for it; this
+// table would have been just as quiet. That gap is now closed in
+// surface_test.go, which loads route-surface.json -- generated in core from
+// apps/api/src/openapi.ts and copied here, not transcribed -- and fails when
+// the engine serves a route this package has neither a method nor a stated
+// reason for. The fixture carries method, path and status codes and nothing
+// else, which is why this file still exists: query parameter names, body
+// encoding and the omission of an absent optional field are not in it, and a
+// wrong one of those is a customer's 400.
+//
+// So the two are complementary and neither is redundant. The fixture answers
+// "does the client know about every route"; this table answers "does it call
+// the routes it knows about correctly".
 //
 // Query strings are url.Values.Encode() output, which sorts alphabetically.
 func TestRequestShapes(t *testing.T) {
@@ -65,6 +67,33 @@ func TestRequestShapes(t *testing.T) {
 			wantPath:   "/api/investigations",
 		},
 		{
+			name:     "CancelInvestigation, no reason",
+			route:    "routes/investigations.ts app.post('/:id/cancel')",
+			response: `{"investigationId":"inv_1","state":"CANCELLED","status":"CANCELLED"}`,
+			call: func(c *Client) error {
+				_, err := c.CancelInvestigation(context.Background(), "inv_1", CancelInvestigationInput{})
+				return err
+			},
+			wantMethod: http.MethodPost,
+			wantPath:   "/api/investigations/inv_1/cancel",
+			// `{}`, not `{"reason":""}`: cancelBody is strict and requires 1 to
+			// 500 characters when reason is present, so an empty string would
+			// be a 400 for a caller who simply said nothing.
+			wantBody: `{}`,
+		},
+		{
+			name:     "CancelInvestigation with a reason",
+			route:    "routes/investigations.ts cancelBody",
+			response: `{"investigationId":"inv_1","state":"CANCELLED","status":"CANCELLED"}`,
+			call: func(c *Client) error {
+				_, err := c.CancelInvestigation(context.Background(), "inv_1", CancelInvestigationInput{Reason: "wrong repository"})
+				return err
+			},
+			wantMethod: http.MethodPost,
+			wantPath:   "/api/investigations/inv_1/cancel",
+			wantBody:   `{"reason":"wrong repository"}`,
+		},
+		{
 			name:     "ListInvestigations with state and paging",
 			route:    "routes/investigations.ts listQuery",
 			response: `{"investigations":[],"total":0}`,
@@ -78,6 +107,22 @@ func TestRequestShapes(t *testing.T) {
 			wantMethod: http.MethodGet,
 			wantPath:   "/api/investigations",
 			wantQuery:  "limit=25&offset=50&state=REPRODUCED_AND_DIAGNOSED",
+		},
+		{
+			name:     "ListInvestigations with repository, signal and outcome",
+			route:    "routes/investigations.ts listQuery",
+			response: `{"investigations":[],"total":0}`,
+			call: func(c *Client) error {
+				_, err := c.ListInvestigations(context.Background(), &InvestigationQuery{
+					Repository: "repo_1",
+					Signal:     "sig_1",
+					Outcome:    "RESOLVED",
+				})
+				return err
+			},
+			wantMethod: http.MethodGet,
+			wantPath:   "/api/investigations",
+			wantQuery:  "outcome=RESOLVED&repository=repo_1&signal=sig_1",
 		},
 		{
 			name:     "CreateInvestigation",
@@ -166,6 +211,17 @@ func TestRequestShapes(t *testing.T) {
 			wantMethod: http.MethodGet,
 			wantPath:   "/api/repositories",
 			wantQuery:  "limit=100",
+		},
+		{
+			name:     "GetRepository",
+			route:    "routes/repositories.ts app.get('/:id')",
+			response: `{"repository":{"id":"repo_1"}}`,
+			call: func(c *Client) error {
+				_, err := c.GetRepository(context.Background(), "repo_1")
+				return err
+			},
+			wantMethod: http.MethodGet,
+			wantPath:   "/api/repositories/repo_1",
 		},
 		{
 			name:     "RepositoryLearnings with kind",
@@ -286,6 +342,34 @@ func TestRequestShapes(t *testing.T) {
 			},
 			wantMethod: http.MethodGet,
 			wantPath:   "/api/validations/val_1/evidence",
+		},
+		{
+			name:     "ValidationFindings with severity and status",
+			route:    "routes/validations.ts findingsQuery",
+			response: `{"findings":[],"total":0}`,
+			call: func(c *Client) error {
+				_, err := c.ValidationFindings(context.Background(), "val_1", &FindingQuery{
+					Severity: "HIGH", Status: "OPEN",
+				})
+				return err
+			},
+			wantMethod: http.MethodGet,
+			wantPath:   "/api/validations/val_1/findings",
+			wantQuery:  "severity=HIGH&status=OPEN",
+		},
+		{
+			name:     "ValidationEvidence with type",
+			route:    "routes/validations.ts evidenceQuery",
+			response: `{"evidence":[],"total":0}`,
+			call: func(c *Client) error {
+				_, err := c.ValidationEvidence(context.Background(), "val_1", &EvidenceQuery{
+					Type: "TEST_RESULT",
+				})
+				return err
+			},
+			wantMethod: http.MethodGet,
+			wantPath:   "/api/validations/val_1/evidence",
+			wantQuery:  "type=TEST_RESULT",
 		},
 		{
 			name:     "ValidationEvents",

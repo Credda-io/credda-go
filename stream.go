@@ -31,6 +31,15 @@ import (
 // second rather than continuing for as long as there is anything worth leaking.
 var ErrStreamRevoked = errors.New("credda: the API key for this stream was revoked")
 
+// ErrStreamIdle is returned by StreamEvent.Err when the engine dropped the
+// stream after five minutes carrying nothing.
+//
+// The run has NOT finished — a finished run says so with a complete frame,
+// which arrives as CompletedState. This is the engine declining to hold a
+// connection for a run that has gone quiet, and resuming from the last
+// Sequence read is the answer to it.
+var ErrStreamIdle = errors.New("credda: the stream carried no event for five minutes and was dropped")
+
 // StreamOptions configures a Stream call.
 type StreamOptions struct {
 	// Since is where to resume from: the sequence of the last event already
@@ -52,8 +61,16 @@ type StreamEvent struct {
 	Event *Event
 	// ValidationEvent is set by StreamValidation.
 	ValidationEvent *ValidationEvent
+	// CompletedState is the terminal state the run reached, set on the final
+	// item of a stream the engine closed because the run ended. Type is
+	// "complete" there and neither Event nor ValidationEvent is set: this is
+	// the run's own answer, not an entry in its timeline. Reopening the stream
+	// would replay the backlog and the same frame.
+	CompletedState string
 	// Err ends the stream. io.EOF is not reported: a clean close simply closes
-	// the channel. ErrStreamRevoked means the credential was withdrawn.
+	// the channel. ErrStreamRevoked means the credential was withdrawn;
+	// ErrStreamIdle means the run went quiet and the engine dropped the
+	// connection without it having finished.
 	Err error
 }
 
@@ -62,10 +79,12 @@ type StreamEvent struct {
 // GET /api/investigations/{id}/stream
 //
 // The returned channel is closed when the stream ends. A stream ends when the
-// caller cancels ctx, when the engine drops it after five minutes carrying
-// nothing (heartbeats deliberately do not count as activity), when the key is
-// revoked, or on a transport failure. The last item before a non-clean close
-// carries Err.
+// run reaches a terminal state and the engine says so — the last item then
+// carries CompletedState — when the caller cancels ctx, when the engine drops
+// it after five minutes carrying nothing (heartbeats deliberately do not count
+// as activity, and that item carries ErrStreamIdle), when the key is revoked,
+// or on a transport failure. The last item before a non-clean close carries
+// Err.
 //
 // The engine holds a process-wide budget of 64 concurrent streams and answers
 // 503 TOO_MANY_STREAMS beyond it; that arrives as an error from this call
@@ -172,10 +191,23 @@ func readFrames(ctx context.Context, body interface{ Read([]byte) (int, error) }
 		if data.Len() == 0 {
 			return true
 		}
-		// The engine's revocation notice: said before closing, so a consumer
-		// learns the connection was withdrawn rather than dropped.
-		if name == "unauthenticated" {
+		// The three notices the engine says before it closes, so a consumer
+		// learns why the connection ended rather than reading a silent drop as
+		// a dropped link. None of them is an event: they carry no `id:` and
+		// their payload is not an event row.
+		switch name {
+		case "unauthenticated":
 			return send(ctx, out, StreamEvent{Err: ErrStreamRevoked})
+		case "idle":
+			return send(ctx, out, StreamEvent{Err: ErrStreamIdle})
+		case "complete":
+			var payload struct {
+				State string `json:"state"`
+			}
+			// A malformed payload still ends the stream: the close is the fact,
+			// and the state is what it carried.
+			_ = json.Unmarshal([]byte(data.String()), &payload)
+			return send(ctx, out, StreamEvent{Type: name, CompletedState: payload.State})
 		}
 		ev := StreamEvent{Type: name}
 		if n, err := strconv.Atoi(id); err == nil {

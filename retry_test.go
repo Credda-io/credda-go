@@ -2,6 +2,7 @@ package credda
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -98,14 +99,79 @@ func TestClientErrorsAreNotRetried(t *testing.T) {
 	}
 }
 
-// THE ONE THAT MATTERS. CreateInvestigation is the only write on this API and
-// it carries no idempotency key, because the API accepts none. A retried POST
-// would enqueue a SECOND investigation against the same report, and two runs on
-// one issue is not something this client will cause on its own.
-func TestCreateInvestigationIsNeverRetried(t *testing.T) {
+// THE ONE THAT MATTERS. Creating an investigation commits a model budget, so a
+// create sent twice is a second bill. Until core 620ea75 this client refused to
+// retry it at all, because the route accepted no idempotency key. It accepts one
+// now, and the guarantee is the engine's rather than this abstention: under a
+// key the second request is answered with the run the first one opened.
+//
+// So the create IS retried, and opens exactly one run.
+func TestCreateInvestigationOnceIsRetriedAndOpensExactlyOneRun(t *testing.T) {
+	var calls, opened int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&calls, 1)
+		if r.Header.Get("Idempotency-Key") == "" {
+			t.Error("the retried create carried no Idempotency-Key; without one a repeat opens a second run")
+		}
+		// The engine records the run on the first request and the response is
+		// lost on the way back. The retry carries the same key, so the engine
+		// hands back that same run with a 200 rather than opening a second.
+		if n == 1 {
+			atomic.AddInt32(&opened, 1)
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Skip("no hijacker on this server")
+			}
+			conn, _, err := hj.Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"investigation":{"id":"inv_1","state":"CREATED"}}`))
+	}))
+	defer srv.Close()
+
+	req, err := NewIdempotentCreate(CreateInvestigationInput{
+		RepositoryID: "repo_1", IssueTitle: "Checkout 500s", IssueBody: "on submit",
+	})
+	if err != nil {
+		t.Fatalf("NewIdempotentCreate: %v", err)
+	}
+	created, err := fastRetryClient(srv.URL, 5).CreateInvestigationOnce(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateInvestigationOnce: %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("the create was sent %d times; want 2 — one lost, one retried", got)
+	}
+	if got := atomic.LoadInt32(&opened); got != 1 {
+		t.Fatalf("the engine opened %d runs; the key exists so that it opens exactly one", got)
+	}
+	if created.Status != StatusReplayed {
+		t.Errorf("Status = %q, want %q: the retry was answered with the run the first attempt opened",
+			created.Status, StatusReplayed)
+	}
+	if created.Opened() {
+		t.Error("Opened() is true on a replay; nothing was created by that request and nothing was billed")
+	}
+	if created.Key != req.Key() {
+		t.Errorf("Key = %q, want %q", created.Key, req.Key())
+	}
+}
+
+// The keyless create is still never retried, and for the reason it always was:
+// with no header the route does exactly what it did before the header existed,
+// one run per request.
+func TestCreateInvestigationWithoutAKeyIsNeverRetried(t *testing.T) {
 	var calls int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&calls, 1)
+		if r.Header.Get("Idempotency-Key") != "" {
+			t.Error("CreateInvestigation sent an Idempotency-Key; it must not invent one")
+		}
 		w.WriteHeader(503)
 		_, _ = w.Write([]byte(`{"error":{"code":"UNAVAILABLE","message":"not now"}}`))
 	}))
@@ -119,7 +185,33 @@ func TestCreateInvestigationIsNeverRetried(t *testing.T) {
 		t.Fatal("want the 503 to surface")
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
-		t.Fatalf("CreateInvestigation was sent %d times; a retried POST enqueues a duplicate investigation", got)
+		t.Fatalf("CreateInvestigation was sent %d times; a retried keyless POST enqueues a duplicate investigation", got)
+	}
+}
+
+// A reused key is an answer, not a blip: the engine understood the request and
+// refused it, so repeating it earns the same 409.
+func TestReusedIdempotencyKeyIsNotRetried(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(409)
+		_, _ = w.Write([]byte(`{"error":{"code":"IDEMPOTENCY_KEY_REUSED","message":"already used"}}`))
+	}))
+	defer srv.Close()
+
+	req, err := NewIdempotentCreate(CreateInvestigationInput{RepositoryID: "repo_1", IssueTitle: "t", IssueBody: "b"})
+	if err != nil {
+		t.Fatalf("NewIdempotentCreate: %v", err)
+	}
+	_, err = fastRetryClient(srv.URL, 5).CreateInvestigationOnce(context.Background(), req)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != CodeIdempotencyKeyReused {
+		t.Fatalf("err = %v, want a 409 %s", err, CodeIdempotencyKeyReused)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("the refusal was sent %d times; want 1", got)
 	}
 }
 

@@ -9,10 +9,17 @@
 
 # `credda`: official Go SDK for the Credda engine API
 
-Credda finds the defects and security vulnerabilities in your production and QA
-environments, reproduces the failure, diagnoses the cause, writes the patch,
-proves it with a test that fails before and passes after, and opens a pull
-request. It proposes. It never merges.
+You label a bug report or a security vulnerability; Credda reproduces the
+failure, diagnoses the cause, writes the patch, proves it with a test that fails
+before and passes after, and hands back a diff. Whether that diff becomes a
+pull request depends on which mechanism delivered it: the **GitHub App** path
+opens one with no flag and no opt-in switch, for a run that reaches
+`READY_FOR_REVIEW` with a proven verdict; the **GitHub Action**, which runs on
+the caller's own runner, opens none unless its `open-pull-request` input is set,
+and that input is declared on no version a caller can reach -- absent from
+`action.yml` at the `v1` tag and on the action's default branch alike -- so
+setting it today parses, runs green and delivers nothing. It proposes. It never
+merges.
 
 This package is a typed Go client over that engine's HTTP API: read the queue,
 read what a run established, watch a run happen live, and enqueue an
@@ -50,7 +57,7 @@ import credda "github.com/Credda-io/credda-go"
 That is the whole install. No vendoring, no `replace` directive, no transitive
 graph to audit.
 
-> **That command gets v0.3.0 today — checked 2026-08-28.** The highest tag this
+> **That command gets v0.3.0 today — checked 2026-08-30.** The highest tag this
 > module has is **v0.3.0**, which is the retired reliability-score client. The
 > engine client this README documents is **v0.4.0, and it is not tagged yet**;
 > `proxy.golang.org` lists only `v0.1.0`, `v0.1.1`, `v0.2.0`, `v0.3.0`. Until
@@ -137,8 +144,14 @@ there is no route here that mints or revokes a key.
 ## What this client can do
 
 Every method is one route the engine actually mounts. All of them are `GET`
-except `CreateInvestigation` — the API mounts exactly one `POST` and no `PATCH`
-or `DELETE` at all.
+except `CreateInvestigation`, `CreateInvestigationOnce` (the same route under an
+idempotency key) and `CancelInvestigation` — the API mounts exactly
+two `POST` routes and no `PATCH` or `DELETE` at all.
+
+Every query parameter and body field this client sends is one the engine's
+schemas declare, which is load-bearing rather than tidy: those schemas reject a
+key they do not define with a **400 `VALIDATION_FAILED`** naming it, where an
+unknown one used to be accepted and ignored.
 
 ### Investigations
 
@@ -146,16 +159,53 @@ or `DELETE` at all.
 | --- | --- |
 | `ListInvestigations` | `GET /api/investigations` |
 | `CreateInvestigation` | `POST /api/investigations` |
+| `CreateInvestigationOnce` | `POST /api/investigations`, with `Idempotency-Key` |
+| `CancelInvestigation` | `POST /api/investigations/{id}/cancel` |
 | `GetInvestigation` | `GET /api/investigations/{id}` |
 | `InvestigationEvents` | `GET /api/investigations/{id}/events` |
 | `InvestigationEvidence` | `GET /api/investigations/{id}/evidence` |
 | `StreamInvestigation` | `GET /api/investigations/{id}/stream` (SSE) |
+
+#### Stopping a run
+
+`CancelInvestigation` answers with what it **achieved**, and a `nil` error does
+**not** mean the run stopped. Switch on `Status`:
+
+| `Status` | HTTP | What is true |
+| --- | --- | --- |
+| `StatusCancelled` | 200 | The job was still queued and was refused its claim. **Nothing is running.** `State` is `CANCELLED`. |
+| `StatusAlreadyCancelled` | 200 | It was already cancelled. Repeating the call is not an error. |
+| `StatusCancellationRequested` | 202 | A worker is **inside** the run, holding a sandbox and possibly a model call. The request is durable and that worker honours it on its next heartbeat — but the run **has not stopped**, and the API writes no terminal state here. The run writes its own when it lets go; the event stream is how you learn that it did. |
+
+```go
+c, err := client.CancelInvestigation(ctx, id, credda.CancelInvestigationInput{
+        Reason: "wrong repository",
+})
+if err != nil {
+        return err
+}
+if c.Status == credda.StatusCancellationRequested {
+        // Still running. Watch for the terminal state the run writes itself.
+}
+```
+
+`Cancellation.Stopped()` is the short form. `Status` is a named type with
+exported constants rather than a `bool` or a bare string, so a caller cannot
+write `if c.Cancelled` and cannot compare against a literal that silently never
+matches.
+
+Two refusals come back as a 409 `*APIError`, because neither stopped anything:
+`ALREADY_FINISHED` — the run reached a terminal state, so there is nothing to
+stop and nothing to undo — and `NOT_CANCELLABLE` — the run is executing outside
+the job queue, which is what `credda run` does, so the API cannot reach it and
+will not pretend it did.
 
 ### Repositories
 
 | Method | Route |
 | --- | --- |
 | `ListRepositories` | `GET /api/repositories` |
+| `GetRepository` | `GET /api/repositories/{id}` |
 | `RepositoryLearnings` | `GET /api/repositories/{id}/learnings` |
 
 ### Resolutions
@@ -194,9 +244,17 @@ or `DELETE` at all.
 Nothing in this package invents an endpoint, a field, a parameter or a
 behaviour. If the engine does not serve it, it is not here. In particular:
 
-- **No method starts, cancels or advances a run.** `CreateInvestigation` writes
-  a row in state `CREATED` and returns; execution is driven by the engine's
-  worker, and the API exposes no route for it.
+- **No method advances a run**, and **no method asks the create route to start
+  one** — which are two different statements, and this README used to make only
+  the second-sounding version of the first. Advancing is the worker's and the
+  API mounts no route for it. Starting is different: the engine's create body
+  takes a `start` boolean (default `false`) that commits the investigation and
+  its job in one write, and an optional downward-only `budget` beside it.
+  `CreateInvestigationInput` carries **neither field**, so every create this
+  package sends records a row and enqueues nothing, and
+  `InvestigationDetail.Start` comes back `NOT_REQUESTED`. That is a gap in this
+  client, not a limit of the engine. Stopping a run is a real route, added
+  2026-08-29 — and even it cannot stop a run the job queue does not own.
 - **No method creates a validation, a patch, or a pull request.** Those are the
   worker's, and the API has no route for them.
 - **No method mints or revokes an API key.** The API has none. Nothing in the
@@ -226,8 +284,60 @@ detail, err := c.CreateInvestigation(ctx, credda.CreateInvestigationInput{
 ```
 
 The body must be under 256KB or the engine refuses it unread with a 413. This
-call is **never retried**, even with `WithRetries` on: the API accepts no
-idempotency key, so a repeat would enqueue a second run against the same report.
+call sends no idempotency key and is **never retried**, even with `WithRetries`
+on: with no header the route does exactly what it always did, one run per
+request, so a repeat would enqueue a second run against the same report.
+
+### Enqueue one you can safely send twice
+
+Opening an investigation commits a model budget, so a create repeated because a
+socket died is a second bill. The route reads an **`Idempotency-Key`**:
+
+| | HTTP | What is true |
+| --- | --- | --- |
+| First request | 201 → `StatusCreated` | A run was opened. |
+| The same body again | 200 → `StatusReplayed` | The same run, returned again. **Nothing was created and nothing was billed.** |
+| A **different** body | 409 `IDEMPOTENCY_KEY_REUSED` | Refused, and neither run is disclosed. Mint a new key for a new report. |
+| No header at all | 201 | Exactly the old behaviour: one run per request. |
+
+The claim is scoped to your organisation and never expires; it is deleted with
+the investigation.
+
+```go
+req, err := credda.NewIdempotentCreate(credda.CreateInvestigationInput{
+	RepositoryID: "repo_1",
+	IssueTitle:   "Checkout returns 500 on submit",
+	IssueBody:    report,
+})
+if err != nil {
+	return err
+}
+if err := jobs.Record(ticketID, req.Key()); err != nil { // so a restart re-sends it
+	return err
+}
+
+created, err := c.CreateInvestigationOnce(ctx, req)
+if err != nil {
+	return err
+}
+if created.Opened() {
+	// This call opened the run.
+} else {
+	// StatusReplayed: an earlier attempt of ours got through. Nothing was billed.
+}
+```
+
+`NewIdempotentCreate` mints the key and binds it to that body; the fields are
+unexported, so a key cannot drift onto a report it does not stand for, and a new
+report gets a new key. `IdempotentCreateWithKey` is for the other direction — a
+restarted process re-sending a request under the key it recorded.
+
+**This package never mints a key behind `CreateInvestigation`.** A key asserts
+that two requests are one intent, and the engine's own handler is explicit that
+only the caller knows that: re-running one report against a non-deterministic
+engine is a real thing to want, and a body-derived key would make it impossible.
+A key this library invented per call could also not be sent again by the process
+that crashed and restarted — the case that actually double-bills.
 
 ### Watch it happen
 
@@ -253,6 +363,10 @@ for ev := range events {
 		}
 		log.Fatal(ev.Err)
 	}
+	if ev.CompletedState != "" {
+		fmt.Println("finished:", ev.CompletedState)
+		break
+	}
 	fmt.Printf("[%d] %s: %s\n", ev.Sequence, ev.Type, ev.Event.Summary)
 }
 ```
@@ -261,10 +375,14 @@ Keep the last `Sequence` you saw. Pass it as `StreamOptions.Since` to resume
 without replaying — it goes out as both the `since` parameter and the
 `Last-Event-ID` header.
 
-A stream ends when you cancel `ctx`, when the engine drops it after five minutes
-carrying nothing, when the key is revoked, or on a transport failure. Debug-
-severity events are never sent over a stream at all; use `InvestigationEvents`
-with `IncludeDebug` for those.
+A stream ends when the run reaches a terminal state — the engine sends a
+`complete` frame, which arrives as a final item carrying `CompletedState` and no
+`Event` — when you cancel `ctx`, when the engine drops it after five minutes
+carrying nothing (`ErrStreamIdle`, and the run has *not* finished, so resuming
+from the last `Sequence` is the answer), when the key is revoked
+(`ErrStreamRevoked`), or on a transport failure. Debug-severity events are never
+sent over a stream at all; use `InvestigationEvents` with `IncludeDebug` for
+those.
 
 ### Read what it established
 
@@ -349,8 +467,13 @@ stack traces and SQL text never cross the boundary — and the `X-Request-Id` is
 the only thing that finds the failure in the engine's logs.
 
 Codes: `INVALID_REQUEST`, `VALIDATION_FAILED`, `NOT_FOUND`, `NO_ORGANIZATION`,
+`ALREADY_FINISHED`, `NOT_CANCELLABLE`, `IDEMPOTENCY_KEY_REUSED`,
 `PAYLOAD_TOO_LARGE`, `UNAUTHENTICATED`, `TOO_MANY_STREAMS`, `UNAVAILABLE`,
-`INTERNAL_ERROR`. Each is a `Code*` constant.
+`INTERNAL_ERROR`. Each is a `Code*` constant. `ALREADY_FINISHED` and
+`NOT_CANCELLABLE` are the cancel route's and `IDEMPOTENCY_KEY_REUSED` is the
+create route's, and they appear nowhere else. `UNAVAILABLE` is the one no response can actually carry — it is a
+default every call site in the engine overrides — and it is a constant only so
+that removing an exported name does not break a build.
 
 `GetHealth` is the one method that returns **both** a value and an error: a
 degraded engine answers 503 *and* names the check that failed, and throwing the
@@ -358,10 +481,15 @@ body away would force a second request for what you already asked.
 
 ### Retries
 
-Off by default. `WithRetries(n)` retries network errors and 429/502/503/504 —
-on `GET` only. Backoff doubles from 300ms, capped at 5s, and the server's
-`Retry-After` wins when one is sent. A cancelled context interrupts the wait,
-not just the request.
+Off by default. `WithRetries(n)` retries network errors and 429/502/503/504 on
+every `GET`, and on exactly one write: `CreateInvestigationOnce`, which carries
+an `Idempotency-Key` the engine deduplicates against, so a repeat returns the run
+the first attempt opened rather than opening a second. `CreateInvestigation` and
+`CancelInvestigation` are never retried — the first carries no key, and the
+second answers a different status when a repeat crosses a worker's heartbeat.
+
+Backoff doubles from 300ms, capped at 5s, and the server's `Retry-After` wins
+when one is sent. A cancelled context interrupts the wait, not just the request.
 
 `GetHealth` is held out of this, whatever `n` is. Its 503 is the answer rather
 than a blip — a readiness check failed and the body names which — so repeating
@@ -437,18 +565,30 @@ the PR is what the product is for, and this client types the whole record that
 describes one: `Patch`, `Verification`, `VerificationSignals`,
 `Resolution.Fix`, `Resolution.RegressionProtection`.
 
-**Status, with a date on it:** as of the API this client was written against
-(August 2026), the engine's patch path is withheld from the default run pending
-the first model-backed run. On such a deployment `InvestigationDetail.Patches`
-and `.Verifications` come back empty, and `Resolution.Fix` and
-`.Verification` come back `nil`, with the reason named in
-`Confidence.NotEstablished` rather than papered over.
+**Status, with a date on it — and it has moved.** This section used to say the
+patch path was withheld from the default run pending the first model-backed run.
+That expired on **2026-08-27**, when ADR 0019 put the Fix and Verify stages back
+on the investigation path on the evidence that a model-backed provider exists
+and works. The engine's `INVESTIGATION_STATES` carries the seven patch-path
+states — `GENERATING_PATCH`, `TESTING_PATCH`, `VERIFYING`, `VERIFIED`,
+`READY_FOR_REVIEW`, `VERIFICATION_FAILED`, `PATCH_REJECTED` — and
+`credda.InvestigationStates` here withheld all seven until this commit, so
+filtering `?state=READY_FOR_REVIEW` was a valid query this package told you did
+not exist.
 
-That is a status and not a principle. It is gated on one API key, it moves when
-the number moves, and this client already types what it will carry when it does.
-The Credda engine's own [ADR 0018](https://github.com/Credda-io/core) is the
-authority on this and says it plainly: a sentence describing a missing capability
-must be falsifiable by a number, and must move when the number moves.
+What is still conditional is the **deployment**, not the product. The gate is
+not in the state graph: `provider.isGenerative` in the orchestrator decides
+whether a run enters the fix stage at all, because a rule-based provider cannot
+author a patch and a heuristic patch is worse than none. On a deployment that
+resolved no generative provider, `InvestigationDetail.Patches` and
+`.Verifications` come back empty and `Resolution.Fix` and `.Verification` come
+back `nil`, with the reason named in `Confidence.NotEstablished` rather than
+papered over. That is a fact about one deployment's configuration, and it must
+not be written down again as a fact about Credda.
+
+ADR 0018 is the authority and says it plainly: a sentence describing a missing
+capability must be falsifiable by a number, and must move when the number moves.
+This section is what happens when nobody moves it.
 
 ## The no-dependencies rule
 
