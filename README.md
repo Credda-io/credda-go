@@ -11,9 +11,15 @@
 
 You label a bug report or a security vulnerability; Credda reproduces the
 failure, diagnoses the cause, writes the patch, proves it with a test that fails
-before and passes after, and hands back a diff. Opening a pull request is
-opt-in, off by default, and has not yet run against a real repository. It
-proposes. It never merges.
+before and passes after, and hands back a diff. Whether that diff becomes a
+pull request depends on which mechanism delivered it: the **GitHub App** path
+opens one with no flag and no opt-in switch, for a run that reaches
+`READY_FOR_REVIEW` with a proven verdict; the **GitHub Action**, which runs on
+the caller's own runner, opens none unless its `open-pull-request` input is set,
+and that input is declared on no version a caller can reach -- absent from
+`action.yml` at the `v1` tag and on the action's default branch alike -- so
+setting it today parses, runs green and delivers nothing. It proposes. It never
+merges.
 
 This package is a typed Go client over that engine's HTTP API: read the queue,
 read what a run established, watch a run happen live, and enqueue an
