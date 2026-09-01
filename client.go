@@ -73,7 +73,15 @@ import (
 // default: Credda runs against a customer's own deployment, so a base URL is
 // something a caller supplies with WithBaseURL rather than something this
 // package knows.
-const DefaultBaseURL = "http://localhost:3001"
+//
+// The port is 4317 because that is what the engine's API actually binds:
+// apps/api/src/server.ts defaults `port` to 4317, and core/docs/setup.md tells
+// the reader to verify an install with `curl -s localhost:4317/api/health`.
+// This constant said 3001 until 2026-09-01, which is a port nothing in the tree
+// serves -- so a caller who took the default, as the name invites, got
+// connection refused against a healthy engine and had no reason to suspect the
+// client rather than their own deployment.
+const DefaultBaseURL = "http://localhost:4317"
 
 // apiPrefix is prepended to every /api route. /livez is mounted outside it,
 // ahead of the auth gate (apps/api/src/app.ts).

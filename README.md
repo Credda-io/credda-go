@@ -84,7 +84,7 @@ import (
 
 func main() {
 	c := credda.NewClient(
-		credda.WithBaseURL("https://credda.internal:3001"),
+		credda.WithBaseURL("https://credda.internal:4317"),
 		credda.WithAPIKey(os.Getenv("CREDDA_API_KEY")),
 		credda.WithRetries(2),
 	)
@@ -115,7 +115,7 @@ keeps this product honest with itself, which is why it is the example.
 
 | Option | What it does |
 | --- | --- |
-| `WithBaseURL(url)` | The engine's API root. **Required in practice**: Credda runs on your own deployment, so there is no hosted default. The default is `http://localhost:3001`. |
+| `WithBaseURL(url)` | The engine's API root. There is no HOSTED default, because Credda runs on your own deployment; the local default is `http://localhost:4317`, the port `apps/api` binds. Supply this whenever the engine is anywhere else. |
 | `WithAPIKey(key)` | The organisation API key, sent as an RFC 6750 bearer token on every request. |
 | `WithHTTPClient(hc)` | Your own `*http.Client` — timeouts, transport, proxies. Needed for streaming; see below. |
 | `WithRetries(n)` | Opt-in retries of transient failures. Off by default. |

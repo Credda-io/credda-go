@@ -265,3 +265,26 @@ func TestCancelledContextStopsTheRequest(t *testing.T) {
 		t.Fatal("want an error for a cancelled context, got nil")
 	}
 }
+
+// TestDefaultBaseURLMatchesTheEngine pins the default to the port the engine
+// actually binds.
+//
+// This constant said 3001 until 2026-09-01. Nothing in the tree serves 3001:
+// apps/api/src/server.ts defaults `port` to 4317, and core/docs/setup.md
+// verifies an install with `curl -s localhost:4317/api/health`. A caller who
+// took the default -- which the name invites -- got connection refused against a
+// perfectly healthy engine, with every reason to suspect their own deployment
+// rather than this client.
+//
+// A literal rather than a reference, because the value it has to agree with
+// lives in a TypeScript file this package cannot import. If the engine's default
+// ever moves, both change together and this test is the reminder.
+func TestDefaultBaseURLMatchesTheEngine(t *testing.T) {
+	if DefaultBaseURL != "http://localhost:4317" {
+		t.Fatalf("DefaultBaseURL = %q, want http://localhost:4317 (the port apps/api binds)", DefaultBaseURL)
+	}
+	c := NewClient()
+	if c.baseURL != "http://localhost:4317" {
+		t.Fatalf("a client built with no options has baseURL %q, want the engine's default", c.baseURL)
+	}
+}
