@@ -57,10 +57,12 @@ import credda "github.com/Credda-io/credda-go"
 That is the whole install. No vendoring, no `replace` directive, no transitive
 graph to audit.
 
-> **That command gets v0.3.0 today — checked 2026-08-30.** The highest tag this
-> module has is **v0.3.0**, which is the retired reliability-score client. The
-> engine client this README documents is **v0.4.0, and it is not tagged yet**;
-> `proxy.golang.org` lists only `v0.1.0`, `v0.1.1`, `v0.2.0`, `v0.3.0`. Until
+> **That command gets v0.3.0 today — re-checked 2026-09-20.** The highest tag
+> this module has is **v0.3.0**, which is the retired reliability-score client.
+> The engine client this README documents is **v0.4.0, and it is not tagged
+> yet**; `https://proxy.golang.org/github.com/!credda-io/credda-go/@v/list`
+> returns exactly `v0.1.0`, `v0.1.1`, `v0.2.0`, `v0.3.0`, and
+> `gh api repos/Credda-io/credda-go/tags` agrees. Until
 > v0.4.0 is cut, `go get` resolves to the wrong product, and the `retract`
 > directives described under [Versioning](#versioning) — which are already in
 > `go.mod` — have no effect, because the proxy only honours a `retract` from a
