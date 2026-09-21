@@ -9,15 +9,47 @@
 [extend]
 useDefault = true
 
-# There is no allowlist, and that is the current state rather than a policy.
+# The one allowlist entry, and why it is this narrow.
 #
-# The previous one exempted `idempotency`-matching lines in client_test.go: the
-# retired trust client sent an Idempotency-Key on its event-reporting POST, and
-# the fixture values tripped the generic-api-key heuristic on entropy alone.
-# That surface is gone. The engine API accepts no idempotency key on its one
-# POST route, so no such fixture exists and the exemption was covering nothing.
+# The previous version of this file said "there is no allowlist", on the stated
+# grounds that the trust client's Idempotency-Key fixtures were gone: the engine
+# API accepts no idempotency key on its one POST route, so nothing in the
+# worktree could trip the heuristic. That was true of the WORKTREE and irrelevant
+# to this gate. The CI job checks out with fetch-depth: 0 and runs
+# `detect --source`, which scans every commit -- so a fixture deleted in
+# 6bd35dd ("rewrite: credda-go is a client for the engine API") is still there
+# to be found in b387be8, where it was added. Removing the exemption on
+# worktree evidence left `main` red on every run.
 #
-# Every test in this package runs against httptest.NewServer and authenticates
-# against nothing; the only bearer token in the tree is the literal "test-key".
-# If a future fixture trips the scanner, add the narrowest possible path-and-
-# regex allowlist here with the reason, rather than widening this file.
+# What it exempts: the literal `key-12345678`, in client_test.go, under the
+# generic-api-key rule only.
+#
+# Why that is not a secret. It is a table-driven test case in a package whose
+# every test runs against httptest.NewServer and authenticates against nothing.
+# An idempotency key is not a credential in the first place -- it is a
+# caller-chosen de-duplication token echoed back in the request body, which is
+# why the fixture appears twice: once as the struct field the caller sets and
+# once inside the exact JSON body the test asserts was sent. It is eight
+# sequential digits behind the word "key", and it is flagged on ENTROPY (3.58)
+# rather than by any rule that recognises a credential format. The surface it
+# belonged to -- the retired 0-100 trust product's event-reporting POST -- no
+# longer exists in the API or in this client. There is nothing to rotate.
+#
+# Why an allowlist rather than any of the alternatives. Disabling
+# generic-api-key would blind the repo to the rule most likely to catch a real
+# committed key. Dropping the scan, or dropping fetch-depth: 0, would trade a
+# false positive for no coverage. Rewriting history to erase a test fixture
+# would break every published commit SHA and every `go get` pseudo-version
+# pinned to one, to hide something that was never sensitive.
+#
+# Scope discipline: `condition = "AND"` means all three conditions must hold at
+# once. Without it gitleaks ORs them, and `paths` alone would exempt every
+# future finding anywhere in client_test.go -- which is exactly the widening
+# this block exists to prevent. If a future fixture trips the scanner, add
+# another entry this narrow, with its own reason. Do not widen this one.
+[[allowlists]]
+description = "Test fixture: the retired trust client's idempotency-key value in client_test.go, reachable only through git history (added b387be8, deleted 6bd35dd). A caller-chosen de-duplication token in an httptest-backed test, flagged on entropy alone. Not a credential; nothing to rotate."
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['(^|/)client_test\.go$']
+regexes = ['key-12345678']
