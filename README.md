@@ -612,7 +612,11 @@ go test ./...
 go test -cover ./...
 ```
 
-CI runs all four on Go 1.21, plus a gitleaks scan over the full history.
+CI runs the first three on Go 1.21, plus a gitleaks scan over the full
+history. This said "all four" until 2026-09-20; `.github/workflows/ci.yml` has
+a gofmt step, `go vet ./...` and `go test ./...` and no `-cover` invocation
+anywhere. The coverage run is local-only, and no coverage threshold is
+enforced.
 
 ## License
 
