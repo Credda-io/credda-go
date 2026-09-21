@@ -353,3 +353,50 @@ func TestOtherGETsStillRetryA503(t *testing.T) {
 		t.Errorf("calls = %d, want 2", got)
 	}
 }
+
+// A body this client cannot decode is not a transient failure. The server
+// answered, the answer arrived, and it is not the shape this package expects;
+// asking again returns the same body. Before notRetryable existed, one
+// malformed response cost a caller with WithRetries(3) four full requests and
+// four backoffs to learn what was known on the first.
+func TestDecodeFailuresAreNotRetried(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"investigations":`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(WithBaseURL(srv.URL), WithRetries(3), WithRetryBackoff(time.Millisecond, time.Millisecond))
+	if _, err := c.ListInvestigations(context.Background(), nil); err == nil {
+		t.Fatal("want a decode error for a truncated body, got nil")
+	}
+	if calls != 1 {
+		t.Errorf("a malformed body was requested %d times; want 1", calls)
+	}
+}
+
+// And the transport failures it sits beside are still retried, so the change
+// above narrowed the rule rather than disabling it.
+func TestDecodeFailureDoesNotDisableRetriesGenerally(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"investigations":[],"total":0}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(WithBaseURL(srv.URL), WithRetries(2), WithRetryBackoff(time.Millisecond, time.Millisecond))
+	if _, err := c.ListInvestigations(context.Background(), nil); err != nil {
+		t.Fatalf("ListInvestigations: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("calls = %d; want 2 (one 503, one success)", calls)
+	}
+}

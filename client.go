@@ -228,11 +228,29 @@ func (ro requestOptions) safeToRepeat() bool {
 	return ro.method == http.MethodGet || ro.idempotencyKey != ""
 }
 
+// notRetryable marks a failure that repeating the request cannot fix.
+//
+// The default for a non-APIError is "retry", because the usual non-APIError is
+// a transport failure and those are exactly what retries are for. A response
+// this client could not DECODE is the other kind: the server answered, the
+// answer arrived intact, and it is not the shape this package expects. Asking
+// again returns the same body. Until this type existed a single malformed
+// response cost a caller with WithRetries(3) four full requests and four
+// backoffs before reporting a failure that was known on the first.
+type notRetryable struct{ err error }
+
+func (e *notRetryable) Error() string { return e.err.Error() }
+func (e *notRetryable) Unwrap() error { return e.err }
+
 // retryable decides whether err is worth repeating. A non-APIError is a
 // transport failure, which is. An APIError is when the status is transient:
 // 429 and 5xx gateway statuses from a proxy, and 503, which is what the engine
 // itself answers for UNAVAILABLE and TOO_MANY_STREAMS.
 func retryable(err error) bool {
+	var never *notRetryable
+	if errors.As(err, &never) {
+		return false
+	}
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		return true
@@ -321,7 +339,9 @@ func (c *Client) attempt(ctx context.Context, ro requestOptions, encoded []byte,
 
 	req, err := http.NewRequestWithContext(ctx, ro.method, full, reader)
 	if err != nil {
-		return nil, fmt.Errorf("credda: building request: %w", err)
+		// A base URL or an id that will not form a request will not form one
+		// on the second attempt either.
+		return nil, &notRetryable{fmt.Errorf("credda: building request: %w", err)}
 	}
 	if encoded != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -376,7 +396,7 @@ func (c *Client) attempt(ctx context.Context, ro requestOptions, encoded []byte,
 		return resp, nil
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
-		return nil, fmt.Errorf("credda: decoding response from %s: %w", ro.path, err)
+		return nil, &notRetryable{fmt.Errorf("credda: decoding response from %s: %w", ro.path, err)}
 	}
 	return resp, nil
 }
