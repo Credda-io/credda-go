@@ -195,11 +195,20 @@ func readFrames(ctx context.Context, body interface{ Read([]byte) (int, error) }
 		// learns why the connection ended rather than reading a silent drop as
 		// a dropped link. None of them is an event: they carry no `id:` and
 		// their payload is not an event row.
+		//
+		// Each one ENDS the stream, as the StreamEvent doc states: after it we
+		// stop reading and let the deferred Body.Close run, rather than scanning
+		// on. The engine closes the connection right after any of them, so today
+		// the next Scan would return EOF regardless; returning false here makes
+		// "Err ends the stream" a fact about this reader and not a bet on the
+		// server never emitting a frame after a terminal notice.
 		switch name {
 		case "unauthenticated":
-			return send(ctx, out, StreamEvent{Err: ErrStreamRevoked})
+			send(ctx, out, StreamEvent{Err: ErrStreamRevoked})
+			return false
 		case "idle":
-			return send(ctx, out, StreamEvent{Err: ErrStreamIdle})
+			send(ctx, out, StreamEvent{Err: ErrStreamIdle})
+			return false
 		case "complete":
 			var payload struct {
 				State string `json:"state"`
@@ -207,7 +216,8 @@ func readFrames(ctx context.Context, body interface{ Read([]byte) (int, error) }
 			// A malformed payload still ends the stream: the close is the fact,
 			// and the state is what it carried.
 			_ = json.Unmarshal([]byte(data.String()), &payload)
-			return send(ctx, out, StreamEvent{Type: name, CompletedState: payload.State})
+			send(ctx, out, StreamEvent{Type: name, CompletedState: payload.State})
+			return false
 		}
 		ev := StreamEvent{Type: name}
 		if n, err := strconv.Atoi(id); err == nil {

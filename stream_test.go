@@ -386,3 +386,49 @@ func TestStreamSurfacesTheIdleDrop(t *testing.T) {
 	for range ch {
 	}
 }
+
+// A terminal notice ends the stream: nothing the same connection emits after
+// `idle` (or `complete`, or `unauthenticated`) is delivered as if the stream
+// were still live. The engine closes right after the notice, so this only bites
+// if that ever changes -- but the StreamEvent contract is "Err ends the stream",
+// and the reader must honour it rather than keep scanning the connection the
+// engine declared dropped. Pre-fix, readFrames scanned on and delivered the
+// trailing event after the ErrStreamIdle item.
+func TestStreamStopsAtIdleAndIgnoresTrailingFrames(t *testing.T) {
+	c, _ := sseServer(t,
+		"id: 4\nevent: state.changed\ndata: "+
+			`{"id":"e4","investigationId":"inv_1","sequence":4,"type":"state.changed",`+
+			`"severity":"info","summary":"running","state":null,"agentRunId":null,`+
+			`"toolCallId":null,"evidenceIds":[],"metadata":{},"createdAt":"2026-08-27T10:00:00.000Z"}`+"\n\n",
+		"event: idle\ndata: {\"reason\":\"no events for five minutes; the run has not reached a terminal state\"}\n\n",
+		"id: 9\nevent: state.changed\ndata: "+
+			`{"id":"e9","investigationId":"inv_1","sequence":9,"type":"state.changed",`+
+			`"severity":"info","summary":"LATE","state":null,"agentRunId":null,`+
+			`"toolCallId":null,"evidenceIds":[],"metadata":{},"createdAt":"2026-08-27T10:06:00.000Z"}`+"\n\n",
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ch, err := c.StreamInvestigation(ctx, "inv_1", nil)
+	if err != nil {
+		t.Fatalf("StreamInvestigation: %v", err)
+	}
+
+	var seq []int
+	var last error
+	for ev := range ch {
+		if ev.Err != nil {
+			last = ev.Err
+			continue
+		}
+		seq = append(seq, ev.Sequence)
+	}
+
+	if len(seq) != 1 || seq[0] != 4 {
+		t.Fatalf("delivered sequences = %v, want [4] (the post-idle frame must not be delivered)", seq)
+	}
+	if !errors.Is(last, ErrStreamIdle) {
+		t.Fatalf("stream ended with %v, want ErrStreamIdle", last)
+	}
+}
