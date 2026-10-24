@@ -262,14 +262,12 @@ var filterVocabularies = map[string]map[string]*[]string{
 // no slice for, with the reason. A filter that is neither mapped above nor
 // named here fails, so the engine gaining one is noticed rather than absorbed.
 var untypedFilters = map[string]string{
-	// NOT CARRIED BY THIS PACKAGE AT ALL, which is a different fact from the
-	// one this entry used to state. InvestigationQuery and ResolutionQuery have
-	// Signal -- WHICH signal raised the run -- and no field for hasSignal,
-	// which asks WHETHER one did; api.go says so at both structs. There is no
-	// slice to publish because the filter is absent, not untyped.
-	// @credda/mcp-server does take it as a boolean on both routes. Recorded
-	// rather than built: adding the field is a capability decision.
-	"hasSignal": "not reachable from this package; InvestigationQuery and ResolutionQuery carry no such field, as api.go states at both",
+	// THIS ONE IS NOW CARRIED: InvestigationQuery.HasSignal and
+	// ResolutionQuery.HasSignal are *bool and the list methods serialise each
+	// with setBool. It asks WHETHER a signal raised the run, which Signal
+	// (WHICH signal) cannot. No slice is published because its vocabulary is
+	// ["true","false"] and a *bool is the better type -- the includeDebug reason.
+	"hasSignal": "a boolean, sent as InvestigationQuery.HasSignal / ResolutionQuery.HasSignal; its vocabulary is true/false and Go has a *bool",
 	// This one IS carried: EventQuery.IncludeDebug is a *bool and values()
 	// serialises it. The artifact spells the four accepted encodings and Go
 	// has one, so no slice is published for it.

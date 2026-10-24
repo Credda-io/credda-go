@@ -41,14 +41,20 @@ type InvestigationQuery struct {
 	// Outcome filters to one outcome. Must be a member of
 	// InvestigationOutcomes.
 	Outcome string
+	// HasSignal asks WHETHER a run was raised by a reported failure, which
+	// Signal (WHICH signal) cannot: Bool(true) is every run a signal caused,
+	// Bool(false) every run nothing raised, nil omits the filter. With
+	// Limit=Int(1) the Total beside the page is the exact org-wide count in one
+	// call. Cannot be sent with Signal — the route refuses the pair (400),
+	// since a named signal already answers "has a signal".
+	HasSignal *bool
 	Page
 }
 
-// Two filters the engine's listQuery declares and this struct does not carry:
-// `hasSignal`, which asks WHETHER a run was raised by a reported failure rather
-// than which one raised it, and `issueRef`, the provenance filter that answers
-// "did I already file this?" — and which is the one filter on that route that
-// does not 404 on a value nothing matches. Neither is reachable from here.
+// One filter the engine's listQuery declares and this struct still does not
+// carry: `issueRef`, the provenance filter that answers "did I already file
+// this?" — and which is the one filter on that route that does not 404 on a
+// value nothing matches. `hasSignal` is now reachable above.
 
 // ListInvestigations returns a page of investigations, newest first.
 //
@@ -63,6 +69,7 @@ func (c *Client) ListInvestigations(ctx context.Context, q *InvestigationQuery) 
 		setStr(qs, "repository", q.Repository)
 		setStr(qs, "signal", q.Signal)
 		setStr(qs, "outcome", q.Outcome)
+		setBool(qs, "hasSignal", q.HasSignal)
 		q.Page.apply(qs)
 	}
 	var out InvestigationList
@@ -429,11 +436,13 @@ type ResolutionQuery struct {
 	// keeps this product honest with itself: it is every record nothing
 	// verified.
 	Confidence string
+	// HasSignal asks whether the record names a signal at all, which Signal
+	// cannot: Bool(true) is every record a signal raised, Bool(false) every
+	// record that named none, nil omits it. Cannot be sent with Signal — the
+	// route refuses the pair (400).
+	HasSignal *bool
 	Page
 }
-
-// The engine's listQuery also declares `hasSignal` here, and this struct does
-// not carry it.
 
 // ListResolutions returns a page of resolution records.
 //
@@ -444,6 +453,7 @@ func (c *Client) ListResolutions(ctx context.Context, q *ResolutionQuery) (*Reso
 		setStr(qs, "investigation", q.Investigation)
 		setStr(qs, "signal", q.Signal)
 		setStr(qs, "confidence", q.Confidence)
+		setBool(qs, "hasSignal", q.HasSignal)
 		q.Page.apply(qs)
 	}
 	var out ResolutionList
@@ -543,17 +553,29 @@ func (c *Client) GetValidation(ctx context.Context, id string) (*ValidationDetai
 // it is what separates a failure this change caused from one that was already
 // there.
 //
-// The engine's checksQuery declares a `status` filter over CHECK_STATUSES and
-// counts Total under it; this method takes only a page, so "which of them
-// failed" still means pulling the plan and tallying it here.
-func (c *Client) ValidationChecks(ctx context.Context, id string, p *Page) (*CheckPage, error) {
+// A Status narrows to one check status and Total is counted under it, so
+// CheckQuery{Status: "FAILED", Page: Page{Limit: Int(1)}} is the exact
+// failed-check count without pulling the plan.
+func (c *Client) ValidationChecks(ctx context.Context, id string, q *CheckQuery) (*CheckPage, error) {
 	qs := url.Values{}
-	p.apply(qs)
+	if q != nil {
+		setStr(qs, "status", q.Status)
+		q.Page.apply(qs)
+	}
 	var out CheckPage
 	if err := c.get(ctx, withQuery("/validations/"+esc(id)+"/checks", qs), &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
+}
+
+// CheckQuery filters a validation's checks. Status is one token out of
+// CHECK_STATUSES, matched exactly (never a set), and the engine counts Total
+// under it. The zero value (nil, or an empty Status) is an unfiltered page.
+type CheckQuery struct {
+	// Status must be a member of CheckStatuses when set; anything else is a 400.
+	Status string
+	Page
 }
 
 // FindingQuery filters ValidationFindings. Severity and Status narrow with AND;
