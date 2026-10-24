@@ -467,6 +467,10 @@ func Bool(v bool) *bool { return &v }
 // String is a helper for building optional string fields.
 func String(v string) *string { return &v }
 
+// Float64 is a helper for building optional float fields, e.g. a budget's
+// MaxCostUsd, which is dollars rather than a count.
+func Float64(v float64) *float64 { return &v }
+
 // Page is the limit/offset pair every paged route on this API accepts.
 //
 // Nil means "let the server decide", which is limit=50, offset=0 everywhere.

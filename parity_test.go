@@ -160,6 +160,29 @@ func TestRequestShapes(t *testing.T) {
 			wantBody:   `{"repositoryId":"repo_1","issueTitle":"t","issueBody":""}`,
 		},
 		{
+			// start queues the run and budget lowers its ceiling; both are
+			// omitted when nil (above) and present when set. Only the budget
+			// fields that are set appear, so a partial budget leaves the engine's
+			// defaults in place.
+			name:     "CreateInvestigation queues a run with a budget",
+			route:    "routes/investigations.ts createBody start+budget",
+			response: `{"investigation":{"id":"inv_3","state":"CREATED"},"hypotheses":[],"patches":[],"verifications":[],"evidenceCount":0,"latestSequence":0}`,
+			call: func(c *Client) error {
+				_, err := c.CreateInvestigation(context.Background(), CreateInvestigationInput{
+					RepositoryID: "repo_1",
+					IssueTitle:   "t",
+					IssueBody:    "b",
+					Start:        Bool(true),
+					Budget:       &InvestigationBudgetInput{MaxModelCalls: Int(20), MaxCostUsd: Float64(0.5)},
+				})
+				return err
+			},
+			wantMethod: http.MethodPost,
+			wantPath:   "/api/investigations",
+			wantBody: `{"repositoryId":"repo_1","issueTitle":"t","issueBody":"b",` +
+				`"start":true,"budget":{"maxModelCalls":20,"maxCostUsd":0.5}}`,
+		},
+		{
 			name:     "GetInvestigation",
 			route:    "routes/investigations.ts app.get('/:id')",
 			response: `{"investigation":{"id":"inv_1"},"hypotheses":[],"patches":[],"verifications":[],"evidenceCount":0,"latestSequence":0}`,

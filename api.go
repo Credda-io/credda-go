@@ -74,11 +74,10 @@ func (c *Client) ListInvestigations(ctx context.Context, q *InvestigationQuery) 
 
 // CreateInvestigationInput is the body of CreateInvestigation.
 //
-// It is a strict subset of the engine's createBody: `start` and `budget` are
-// declared there and are not here, so no request this client builds can queue a
-// run or lower its ceiling. The schema is .strict(), so nothing may be added to
-// this struct that the engine does not declare — but the reverse gap, a field
-// the engine declares and this struct omits, fails nothing and is what happened.
+// It mirrors the engine's createBody field for field, including `start` and
+// `budget` — the two that queue a run and bound it. The schema is .strict(), so
+// nothing may be added here the engine does not declare; both directions are now
+// closed.
 type CreateInvestigationInput struct {
 	// RepositoryID must name a repository in this organisation. One that does
 	// not, or that belongs to another organisation, is a 404.
@@ -90,6 +89,34 @@ type CreateInvestigationInput struct {
 	// IssueRef is the reporter's own identifier for this — a ticket URL, an
 	// issue number. Optional, up to 500 characters.
 	IssueRef *string `json:"issueRef,omitempty"`
+	// Start queues the run in the same transaction as the row. Nil (or Bool(false))
+	// records a row that nothing runs until a webhook or `credda run` claims it —
+	// the engine's own default. Set Bool(true) to have the run begin at once.
+	Start *bool `json:"start,omitempty"`
+	// Budget lowers the ceiling for the run this request queues. MEANINGFUL ONLY
+	// WITH Start: the engine refuses a budget without one rather than storing a
+	// ceiling it has nothing to apply, so set Budget only alongside Start=Bool(true).
+	// Every field is a maximum, each capped at the engine's own default; asking for
+	// more than the default is a 400, not a raise. Nil omits the field entirely.
+	Budget *InvestigationBudgetInput `json:"budget,omitempty"`
+}
+
+// InvestigationBudgetInput is a lower ceiling for one run, every field optional
+// and every field a maximum. It is the input counterpart of RunBudget (which is
+// what a run was actually given): there, every field is present; here, an unset
+// field is omitted and leaves the engine's default in place. Mirrors budgetBody
+// in the engine's create route.
+type InvestigationBudgetInput struct {
+	MaxWallClockMs *int `json:"maxWallClockMs,omitempty"`
+	MaxModelCalls  *int `json:"maxModelCalls,omitempty"`
+	MaxTokens      *int `json:"maxTokens,omitempty"`
+	MaxToolCalls   *int `json:"maxToolCalls,omitempty"`
+	// MaxCommandMs bounds any SINGLE command, deliberately not their total.
+	MaxCommandMs     *int `json:"maxCommandMs,omitempty"`
+	MaxSandboxMs     *int `json:"maxSandboxMs,omitempty"`
+	MaxPatchAttempts *int `json:"maxPatchAttempts,omitempty"`
+	// MaxCostUsd is money, not a count, so it is dollars rather than an integer.
+	MaxCostUsd *float64 `json:"maxCostUsd,omitempty"`
 }
 
 // CreateInvestigation records an investigation and returns it in state
@@ -97,18 +124,16 @@ type CreateInvestigationInput struct {
 //
 // POST /api/investigations
 //
-// AS THIS CLIENT SENDS IT, IT RUNS NOTHING. The engine's create route takes a
-// `start` boolean that commits the row and its job in one write, and an
-// optional downward-only `budget` beside it; CreateInvestigationInput carries
-// neither, so the body always omits them, `start` defaults to false at the
-// engine, and this route writes a row nothing will claim until a webhook or a
-// `credda run` picks the work up. The returned detail therefore has no events,
-// no evidence and no outcome, and Start reads "NOT_REQUESTED".
+// IT RUNS NOTHING UNLESS YOU ASK. Leave Start nil and the engine's `start`
+// defaults to false: this records a row nothing claims until a webhook or a
+// `credda run` picks the work up, so the returned detail has no events, no
+// evidence and no outcome. Set Start to Bool(true) to queue the run in the same
+// write, optionally with a Budget to lower its ceiling (a budget without a start
+// is refused, not ignored).
 //
-// Read InvestigationDetail.Start rather than assuming that. It is the route's
-// own statement about what it did, and it is the field to check if this package
-// later learns to ask for a run. Watch Stream or poll InvestigationEvents for
-// what happens next.
+// Read InvestigationDetail.Start rather than assuming either way — it is the
+// route's own statement about what it did. Watch Stream or poll
+// InvestigationEvents for what happens next.
 //
 // This call sends no Idempotency-Key and is never retried, even with
 // WithRetries. Without that header the route behaves exactly as it did before
