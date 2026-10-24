@@ -41,14 +41,20 @@ type InvestigationQuery struct {
 	// Outcome filters to one outcome. Must be a member of
 	// InvestigationOutcomes.
 	Outcome string
+	// HasSignal asks WHETHER a run was raised by a reported failure, which
+	// Signal (WHICH signal) cannot: Bool(true) is every run a signal caused,
+	// Bool(false) every run nothing raised, nil omits the filter. With
+	// Limit=Int(1) the Total beside the page is the exact org-wide count in one
+	// call. Cannot be sent with Signal — the route refuses the pair (400),
+	// since a named signal already answers "has a signal".
+	HasSignal *bool
 	Page
 }
 
-// Two filters the engine's listQuery declares and this struct does not carry:
-// `hasSignal`, which asks WHETHER a run was raised by a reported failure rather
-// than which one raised it, and `issueRef`, the provenance filter that answers
-// "did I already file this?" — and which is the one filter on that route that
-// does not 404 on a value nothing matches. Neither is reachable from here.
+// One filter the engine's listQuery declares and this struct still does not
+// carry: `issueRef`, the provenance filter that answers "did I already file
+// this?" — and which is the one filter on that route that does not 404 on a
+// value nothing matches. `hasSignal` is now reachable above.
 
 // ListInvestigations returns a page of investigations, newest first.
 //
@@ -63,6 +69,7 @@ func (c *Client) ListInvestigations(ctx context.Context, q *InvestigationQuery) 
 		setStr(qs, "repository", q.Repository)
 		setStr(qs, "signal", q.Signal)
 		setStr(qs, "outcome", q.Outcome)
+		setBool(qs, "hasSignal", q.HasSignal)
 		q.Page.apply(qs)
 	}
 	var out InvestigationList
@@ -74,11 +81,10 @@ func (c *Client) ListInvestigations(ctx context.Context, q *InvestigationQuery) 
 
 // CreateInvestigationInput is the body of CreateInvestigation.
 //
-// It is a strict subset of the engine's createBody: `start` and `budget` are
-// declared there and are not here, so no request this client builds can queue a
-// run or lower its ceiling. The schema is .strict(), so nothing may be added to
-// this struct that the engine does not declare — but the reverse gap, a field
-// the engine declares and this struct omits, fails nothing and is what happened.
+// It mirrors the engine's createBody field for field, including `start` and
+// `budget` — the two that queue a run and bound it. The schema is .strict(), so
+// nothing may be added here the engine does not declare; both directions are now
+// closed.
 type CreateInvestigationInput struct {
 	// RepositoryID must name a repository in this organisation. One that does
 	// not, or that belongs to another organisation, is a 404.
@@ -90,6 +96,34 @@ type CreateInvestigationInput struct {
 	// IssueRef is the reporter's own identifier for this — a ticket URL, an
 	// issue number. Optional, up to 500 characters.
 	IssueRef *string `json:"issueRef,omitempty"`
+	// Start queues the run in the same transaction as the row. Nil (or Bool(false))
+	// records a row that nothing runs until a webhook or `credda run` claims it —
+	// the engine's own default. Set Bool(true) to have the run begin at once.
+	Start *bool `json:"start,omitempty"`
+	// Budget lowers the ceiling for the run this request queues. MEANINGFUL ONLY
+	// WITH Start: the engine refuses a budget without one rather than storing a
+	// ceiling it has nothing to apply, so set Budget only alongside Start=Bool(true).
+	// Every field is a maximum, each capped at the engine's own default; asking for
+	// more than the default is a 400, not a raise. Nil omits the field entirely.
+	Budget *InvestigationBudgetInput `json:"budget,omitempty"`
+}
+
+// InvestigationBudgetInput is a lower ceiling for one run, every field optional
+// and every field a maximum. It is the input counterpart of RunBudget (which is
+// what a run was actually given): there, every field is present; here, an unset
+// field is omitted and leaves the engine's default in place. Mirrors budgetBody
+// in the engine's create route.
+type InvestigationBudgetInput struct {
+	MaxWallClockMs *int `json:"maxWallClockMs,omitempty"`
+	MaxModelCalls  *int `json:"maxModelCalls,omitempty"`
+	MaxTokens      *int `json:"maxTokens,omitempty"`
+	MaxToolCalls   *int `json:"maxToolCalls,omitempty"`
+	// MaxCommandMs bounds any SINGLE command, deliberately not their total.
+	MaxCommandMs     *int `json:"maxCommandMs,omitempty"`
+	MaxSandboxMs     *int `json:"maxSandboxMs,omitempty"`
+	MaxPatchAttempts *int `json:"maxPatchAttempts,omitempty"`
+	// MaxCostUsd is money, not a count, so it is dollars rather than an integer.
+	MaxCostUsd *float64 `json:"maxCostUsd,omitempty"`
 }
 
 // CreateInvestigation records an investigation and returns it in state
@@ -97,18 +131,16 @@ type CreateInvestigationInput struct {
 //
 // POST /api/investigations
 //
-// AS THIS CLIENT SENDS IT, IT RUNS NOTHING. The engine's create route takes a
-// `start` boolean that commits the row and its job in one write, and an
-// optional downward-only `budget` beside it; CreateInvestigationInput carries
-// neither, so the body always omits them, `start` defaults to false at the
-// engine, and this route writes a row nothing will claim until a webhook or a
-// `credda run` picks the work up. The returned detail therefore has no events,
-// no evidence and no outcome, and Start reads "NOT_REQUESTED".
+// IT RUNS NOTHING UNLESS YOU ASK. Leave Start nil and the engine's `start`
+// defaults to false: this records a row nothing claims until a webhook or a
+// `credda run` picks the work up, so the returned detail has no events, no
+// evidence and no outcome. Set Start to Bool(true) to queue the run in the same
+// write, optionally with a Budget to lower its ceiling (a budget without a start
+// is refused, not ignored).
 //
-// Read InvestigationDetail.Start rather than assuming that. It is the route's
-// own statement about what it did, and it is the field to check if this package
-// later learns to ask for a run. Watch Stream or poll InvestigationEvents for
-// what happens next.
+// Read InvestigationDetail.Start rather than assuming either way — it is the
+// route's own statement about what it did. Watch Stream or poll
+// InvestigationEvents for what happens next.
 //
 // This call sends no Idempotency-Key and is never retried, even with
 // WithRetries. Without that header the route behaves exactly as it did before
@@ -404,11 +436,13 @@ type ResolutionQuery struct {
 	// keeps this product honest with itself: it is every record nothing
 	// verified.
 	Confidence string
+	// HasSignal asks whether the record names a signal at all, which Signal
+	// cannot: Bool(true) is every record a signal raised, Bool(false) every
+	// record that named none, nil omits it. Cannot be sent with Signal — the
+	// route refuses the pair (400).
+	HasSignal *bool
 	Page
 }
-
-// The engine's listQuery also declares `hasSignal` here, and this struct does
-// not carry it.
 
 // ListResolutions returns a page of resolution records.
 //
@@ -419,6 +453,7 @@ func (c *Client) ListResolutions(ctx context.Context, q *ResolutionQuery) (*Reso
 		setStr(qs, "investigation", q.Investigation)
 		setStr(qs, "signal", q.Signal)
 		setStr(qs, "confidence", q.Confidence)
+		setBool(qs, "hasSignal", q.HasSignal)
 		q.Page.apply(qs)
 	}
 	var out ResolutionList
@@ -518,17 +553,29 @@ func (c *Client) GetValidation(ctx context.Context, id string) (*ValidationDetai
 // it is what separates a failure this change caused from one that was already
 // there.
 //
-// The engine's checksQuery declares a `status` filter over CHECK_STATUSES and
-// counts Total under it; this method takes only a page, so "which of them
-// failed" still means pulling the plan and tallying it here.
-func (c *Client) ValidationChecks(ctx context.Context, id string, p *Page) (*CheckPage, error) {
+// A Status narrows to one check status and Total is counted under it, so
+// CheckQuery{Status: "FAILED", Page: Page{Limit: Int(1)}} is the exact
+// failed-check count without pulling the plan.
+func (c *Client) ValidationChecks(ctx context.Context, id string, q *CheckQuery) (*CheckPage, error) {
 	qs := url.Values{}
-	p.apply(qs)
+	if q != nil {
+		setStr(qs, "status", q.Status)
+		q.Page.apply(qs)
+	}
 	var out CheckPage
 	if err := c.get(ctx, withQuery("/validations/"+esc(id)+"/checks", qs), &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
+}
+
+// CheckQuery filters a validation's checks. Status is one token out of
+// CHECK_STATUSES, matched exactly (never a set), and the engine counts Total
+// under it. The zero value (nil, or an empty Status) is an unfiltered page.
+type CheckQuery struct {
+	// Status must be a member of CheckStatuses when set; anything else is a 400.
+	Status string
+	Page
 }
 
 // FindingQuery filters ValidationFindings. Severity and Status narrow with AND;

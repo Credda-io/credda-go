@@ -125,6 +125,21 @@ func TestRequestShapes(t *testing.T) {
 			wantQuery:  "outcome=RESOLVED&repository=repo_1&signal=sig_1",
 		},
 		{
+			name:     "ListInvestigations with hasSignal",
+			route:    "routes/investigations.ts listQuery hasSignal",
+			response: `{"investigations":[],"total":0}`,
+			call: func(c *Client) error {
+				_, err := c.ListInvestigations(context.Background(), &InvestigationQuery{
+					HasSignal: Bool(true),
+					Page:      Page{Limit: Int(1)},
+				})
+				return err
+			},
+			wantMethod: http.MethodGet,
+			wantPath:   "/api/investigations",
+			wantQuery:  "hasSignal=true&limit=1",
+		},
+		{
 			name:     "CreateInvestigation",
 			route:    "routes/investigations.ts app.post('/') createBody",
 			response: `{"investigation":{"id":"inv_1","state":"CREATED"},"hypotheses":[],"patches":[],"verifications":[],"evidenceCount":0,"latestSequence":0}`,
@@ -158,6 +173,29 @@ func TestRequestShapes(t *testing.T) {
 			wantMethod: http.MethodPost,
 			wantPath:   "/api/investigations",
 			wantBody:   `{"repositoryId":"repo_1","issueTitle":"t","issueBody":""}`,
+		},
+		{
+			// start queues the run and budget lowers its ceiling; both are
+			// omitted when nil (above) and present when set. Only the budget
+			// fields that are set appear, so a partial budget leaves the engine's
+			// defaults in place.
+			name:     "CreateInvestigation queues a run with a budget",
+			route:    "routes/investigations.ts createBody start+budget",
+			response: `{"investigation":{"id":"inv_3","state":"CREATED"},"hypotheses":[],"patches":[],"verifications":[],"evidenceCount":0,"latestSequence":0}`,
+			call: func(c *Client) error {
+				_, err := c.CreateInvestigation(context.Background(), CreateInvestigationInput{
+					RepositoryID: "repo_1",
+					IssueTitle:   "t",
+					IssueBody:    "b",
+					Start:        Bool(true),
+					Budget:       &InvestigationBudgetInput{MaxModelCalls: Int(20), MaxCostUsd: Float64(0.5)},
+				})
+				return err
+			},
+			wantMethod: http.MethodPost,
+			wantPath:   "/api/investigations",
+			wantBody: `{"repositoryId":"repo_1","issueTitle":"t","issueBody":"b",` +
+				`"start":true,"budget":{"maxModelCalls":20,"maxCostUsd":0.5}}`,
 		},
 		{
 			name:     "GetInvestigation",
@@ -257,6 +295,21 @@ func TestRequestShapes(t *testing.T) {
 			wantQuery:  "confidence=NOT_ESTABLISHED&investigation=inv_1&limit=50&offset=0&signal=sig_1",
 		},
 		{
+			name:     "ListResolutions with hasSignal",
+			route:    "routes/resolutions.ts listQuery hasSignal",
+			response: `{"resolutions":[],"total":0}`,
+			call: func(c *Client) error {
+				_, err := c.ListResolutions(context.Background(), &ResolutionQuery{
+					HasSignal: Bool(false),
+					Page:      Page{Limit: Int(1)},
+				})
+				return err
+			},
+			wantMethod: http.MethodGet,
+			wantPath:   "/api/resolutions",
+			wantQuery:  "hasSignal=false&limit=1",
+		},
+		{
 			// `latest` is registered ahead of `/:id` in the engine's router, so
 			// it is a literal segment and never an id.
 			name:     "LatestResolution",
@@ -314,12 +367,24 @@ func TestRequestShapes(t *testing.T) {
 			route:    "routes/validations.ts app.get('/:id/checks')",
 			response: `{"checks":[],"total":0}`,
 			call: func(c *Client) error {
-				_, err := c.ValidationChecks(context.Background(), "val_1", &Page{Limit: Int(100), Offset: Int(0)})
+				_, err := c.ValidationChecks(context.Background(), "val_1", &CheckQuery{Page: Page{Limit: Int(100), Offset: Int(0)}})
 				return err
 			},
 			wantMethod: http.MethodGet,
 			wantPath:   "/api/validations/val_1/checks",
 			wantQuery:  "limit=100&offset=0",
+		},
+		{
+			name:     "ValidationChecks filters by status",
+			route:    "routes/validations.ts checksQuery status",
+			response: `{"checks":[],"total":0}`,
+			call: func(c *Client) error {
+				_, err := c.ValidationChecks(context.Background(), "val_1", &CheckQuery{Status: "FAILED", Page: Page{Limit: Int(1)}})
+				return err
+			},
+			wantMethod: http.MethodGet,
+			wantPath:   "/api/validations/val_1/checks",
+			wantQuery:  "limit=1&status=FAILED",
 		},
 		{
 			name:     "ValidationFindings",
